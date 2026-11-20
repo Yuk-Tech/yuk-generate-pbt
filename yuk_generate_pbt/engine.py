@@ -659,7 +659,10 @@ def apply_parcel_style(layer, outline_rgb, text_rgb, fields, denominator):
     )
 
     geom_type = layer.geometryType()
-    # QGIS 3: QgsWkbTypes.PolygonGeometry == 2 ; QGIS 4: sama (enum stabil).
+    # Bentuk enum scoped (QGIS 4 / Qt6) — nilai sama di QGIS 3.22
+    # (teruji: GeometryType.PolygonGeometry == 2, RenderUnit.RenderPoints
+    # == 4 di kedua versi). Bentuk datar (QgsWkbTypes.PolygonGeometry)
+    # ditolak pemindai kompatibilitas Qt6 plugins.qgis.org.
     is_polygon = geom_type == 2
     ket_field = next((f for f in fields if f.lower() == "ket"), None)
 
@@ -769,7 +772,7 @@ def apply_parcel_style(layer, outline_rgb, text_rgb, fields, denominator):
                 fmt = QgsTextFormat()
                 fmt.setFont(QFont("Arial", size))
                 fmt.setSize(size)
-                fmt.setSizeUnit(QgsUnitTypes.RenderPoints)
+                fmt.setSizeUnit(QgsUnitTypes.RenderUnit.RenderPoints)
                 fmt.setColor(_qgis_color(text_rgb))
                 settings.setFormat(fmt)
             except Exception:  # nosec B110  # best-effort: kegagalan opsional diabaikan
@@ -893,7 +896,7 @@ def read_feature_boxes(layer, pk_col):
         if geom is None or geom.isNull() or geom.isEmpty():
             continue
         rings = []
-        if geom.type() == QgsWkbTypes.PolygonGeometry:
+        if geom.type() == QgsWkbTypes.GeometryType.PolygonGeometry:
             polys = (
                 geom.asMultiPolygon()
                 if geom.isMultipart()

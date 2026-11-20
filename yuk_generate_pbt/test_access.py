@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Uji gerbang kode akses beta v0.5.8 — headless di sandbox E2B.
+"""Uji gerbang kode akses beta v0.5.9 — headless di sandbox E2B.
 
 Memeriksa (tanpa GUI):
   1. license.validate_code: kode salah ditolak, kode valid diterima,
@@ -9,7 +9,7 @@ Memeriksa (tanpa GUI):
      "Belum aktif"; kode valid -> Aktifkan -> kedua tombol HIDUP +
      status aktif; panel baru (proses sama) tetap aktif (QSettings
      tersimpan); deactivate -> tombol MATI lagi.
-  3. Footer stempel versi v0.5.8.
+  3. Footer stempel versi v0.5.9.
 
 Kode uji disuntik hash-nya saat jalan (bukan kode beta asli — kode
 asli sudah diverifikasi lokal: 10/10 valid, lihat license.py).
@@ -32,7 +32,7 @@ from yuk_generate_pbt.panel import YukGeneratePbtPanel
 
 # Bersihkan status aktif dari run sebelumnya (deterministik).
 lic.deactivate()
-# Paksa mode lokal: panel v0.5.8 memakai URL API bawaan bila kunci
+# Paksa mode lokal: panel v0.5.9 memakai URL API bawaan bila kunci
 # belum ada di QSettings — uji ini harus jalan tanpa server.
 lic._settings().setValue(lic.LICENSE_KEY_API, "")
 lic.set_api_base("")
@@ -60,8 +60,8 @@ assert "Belum aktif" in panel.license_status.text(), (
     "status awal salah: {}".format(panel.license_status.text())
 )
 footer_texts = [w.text() for w in panel.findChildren(QLabel)]
-assert any("v0.5.8" in t and "By @muhfadllah" in t for t in footer_texts), (
-    "stempel versi v0.5.8 tidak ada di footer: {}".format(footer_texts)
+assert any("v0.5.9" in t and "By @muhfadllah" in t for t in footer_texts), (
+    "stempel versi v0.5.9 tidak ada di footer: {}".format(footer_texts)
 )
 
 # Kode salah dulu: tetap terkunci.
@@ -94,6 +94,6 @@ panel3 = YukGeneratePbtPanel()
 QApplication.processEvents()
 assert not panel3.generate_button.isEnabled(), "Generate harus MATI setelah deactivate"
 
-print("AKSES BETA: LULUS — kunci + aktivasi + tersimpan + lepas + stempel v0.5.8")
+print("AKSES BETA: LULUS — kunci + aktivasi + tersimpan + lepas + stempel v0.5.9")
 sys.stdout.flush()
 os._exit(0)
