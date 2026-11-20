@@ -1,12 +1,12 @@
 [general]
 name=Yuk Generate PBT! — By @muhfadllah
-description=Generate Peta Bidang Tanah (PBTF) dari GeoPackage + template QPT: grouping hibrida, label 3 baris, render PDF per lembar, ZIP. Port plugin QGIS dari aplikasi desktop "Yuk Generate PBT! by @Muhfadllah" (PoC).
-about=PoC plugin QGIS. Alur: pilih GPKG + layer + template QPT + (opsional) ECW, atur skala/warna/varian, Generate. Layout dimuat dari .qpt, styling (renderer aturan KET + labeling) diterapkan lewat PyQGIS, render lewat QgsLayoutExporter. Semua fitur aplikasi desktop dipertahankan; tidak ada file debug/log yang ditulis.
-version=0.3.0
+description=Generate Peta Bidang Tanah (PBTF) land parcel maps from a GeoPackage + QPT template: hybrid grouping, 3-line parcel labels, one PDF per sheet, ZIP export. QGIS port of the desktop app "Yuk Generate PBT! by @Muhfadllah". Beta: requires an access code.
+about=QGIS plugin (beta — requires an access code). Workflow: enter your beta access code, pick a GPKG + layer + QPT template + (optional) ECW imagery, set scale/colors/variant, then Generate. Layouts are loaded from .qpt; parcel styling (KET rule renderer + labeling) is applied via PyQGIS and rendered with QgsLayoutExporter. All desktop app features are kept; no debug/log files are written.
+version=0.5.4
 qgisMinimumVersion=3.22
 qgisMaximumVersion=4.99
 author=@Muhfadllah
-email=deranawarp1@gmail.com
+email=mfadllah4th@gmail.com
 repository=https://github.com/Yuk-Tech/yuk-generate-pbt
 tags=ptsl,pbt,cadastre,print layout
 icon=icon.png

@@ -9,6 +9,7 @@ Plugin QGIS untuk generate **Peta Bidang Tanah (PBTF)** dari GeoPackage + templa
 - Render PDF per lembar (varian dengan/tanpa citra ECW) + ZIP
 - **Satu proyek QGIS (.qgs) berisi semua lembar** — bisa diedit di QGIS sebelum diekspor ke PDF
 - **Isi frame 9 butir**: sistem koordinat, desa/kelurahan, kabupaten/kota, kecamatan, provinsi, petugas ukur + lisensi, pimpinan, penggunaan, pelaksana
+- **Beta: butuh kode akses** — Hitung lembar dan Generate terkunci sampai kode akses beta dimasukkan (berlaku sampai 31 Des 2026)
 
 ## Instalasi
 
@@ -18,9 +19,10 @@ Plugin QGIS untuk generate **Peta Bidang Tanah (PBTF)** dari GeoPackage + templa
 ## Pakai
 
 1. Buka sidebar plugin (toolbar / menu Plugins).
-2. Pilih GeoPackage + layer + template QPT (+ ECW bila pakai citra).
-3. Atur skala, warna, dan isi frame.
-4. Generate — PDF + ZIP + file `.qgs` tersimpan di folder output.
+2. Masukkan kode akses beta (bagian "Kode Akses Beta") lalu Aktifkan.
+3. Pilih GeoPackage + layer + template QPT (+ ECW bila pakai citra).
+4. Atur skala, warna, dan isi frame.
+5. Generate — PDF + ZIP + file `.qgs` tersimpan di folder output.
 
 ## Struktur repo
 

@@ -8,10 +8,11 @@ bisa; ini buktinya.
 
 | File | Isi |
 |---|---|
-| `metadata.txt` | Metadata plugin (nama "Yuk Generate PBT! — By @muhfadllah", versi 0.2.0, QGIS ≥ 3.22, author @Muhfadllah) |
+| `metadata.txt` | Metadata plugin (nama "Yuk Generate PBT! — By @muhfadllah", versi 0.5.4, QGIS ≥ 3.22, author @Muhfadllah) |
 | `__init__.py` | Titik masuk — `classFactory()` |
 | `yuk_generate_pbt.py` | Kelas plugin: tombol toolbar + menu, buka/tutup sidebar (QDockWidget) |
-| `panel.py` | Panel sidebar PyQt: pemilih GPKG/QPT/ECW, skala, warna, varian, form pengesahan, format, riwayat, tombol Tutup |
+| `panel.py` | Panel sidebar PyQt: kode akses beta, pemilih GPKG/QPT/ECW, skala, warna, varian, form pengesahan, isi frame, format, riwayat, tombol Tutup |
+| `license.py` | Gerbang kode akses beta: hash SHA-256 kode, masa berlaku sampai 31 Des 2026, status aktif di QSettings |
 | `engine.py` | Mesin PyQGIS: grouping hibrida + styling + render + ZIP (tanpa dependensi Qt) |
 | `test_headless.py` | Uji render headless di sandbox (tanpa GUI) |
 | `test_dock.py` | Uji sidebar headless di sandbox (toggle, Tutup, X, screenshot) |
@@ -19,6 +20,7 @@ bisa; ini buktinya.
 | `test_citra.py` | Uji render DENGAN citra headless di sandbox (urutan layer vektor/raster) |
 | `test_subset_fallback.py` | Uji fallback subset headless di sandbox (subset 0 fitur / SQL invalid) |
 | `test_frame_qgs.py` | Uji isi frame + proyek .qgs headless di sandbox (nilai kustom, muat ulang .qgs) |
+| `test_access.py` | Uji gerbang kode akses beta headless di sandbox (validasi kode, kunci/buka panel, tersimpan di QSettings) |
 | `icon.png` | Ikon toolbar (robot) |
 | `yuk-logo.png` | Logo di panel |
 
@@ -43,8 +45,9 @@ bisa; ini buktinya.
 
 ## Cara pakai
 
-1. Pilih **GeoPackage** (`PBT_2091.gpkg`) → layer terisi otomatis.
-2. Pilih **Template QPT** (`PBTF_WARDOY.qpt`).
+1. Masukkan **kode akses beta** di bagian "Kode Akses Beta" lalu Aktifkan — tombol Hitung lembar dan Generate terkunci sampai kode valid dimasukkan.
+2. Pilih **GeoPackage** (`PBT_2091.gpkg`) → layer terisi otomatis.
+3. Pilih **Template QPT** (`PBTF_WARDOY.qpt`).
 3. (Opsional) Pilih **Citra ECW** → centang "Dengan citra ECW".
 4. Atur skala (default Auto), warna persil (default Hijau), warna teks
    (default Abu gelap), isi Tanggal / No PBT / No Blok, logo & TTD bila ada.
@@ -210,6 +213,85 @@ bisa; ini buktinya.
   UTM 48S, dst.) — 16/16 teks benar di .qgs hasil muat ulang, tanpa
   sisa nilai default; render penuh tetap lulus (10 lembar + .qgs 10
   layout + isi frame default).
+- **v0.5.4 (2026-11-21):** email kontak di metadata diganti
+  mfadllah4th@gmail.com (seluruh source
+  dicek — hanya metadata.txt yang memakai email itu). Isi plugin
+  sama dengan v0.5.3.
+- **v0.5.3 (2026-11-21):** deskripsi + about metadata ditulis ulang
+  dalam Bahasa Inggris (syarat checklist upload plugins.qgis.org —
+  sebelumnya Bahasa Indonesia). Isi plugin sama dengan v0.5.2.
+- **v0.5.2 (2026-11-21):** perbaikan keamanan kuota. `consume-generate`
+  sekarang WAJIB memakai kode asli — versi 0.5.0/0.5.1 mengirim hash
+  tersimpan, padahal hash-nya tercantum di kode plugin (terbuka),
+  sehingga siapa pun bisa menguras kuota semua kode beta tanpa tahu
+  kodenya. Sekarang kode asli disimpan di QSettings (mesin pengguna
+  sendiri) dan dikirim ke server, yang menghitung hash-nya di sana.
+  Aktivasi lama (hanya hash, tanpa kode) dianggap tidak aktif —
+  pengguna memasukkan ulang kodenya sekali. Plugin mengirim kode +
+  hash sekaligus supaya tetap jalan selama function lama belum
+  di-deploy ulang; function baru mengabaikan hash. Diuji headless
+  lawan API tiruan (`test_api_license.py`): serangan hash-only
+  ditolak dan kuota utuh, migrasi aktivasi lama, konsumsi normal.
+- **v0.5.1 (2026-11-21):** URL API lisensi jadi bawaan plugin
+  (`DEFAULT_API_BASE_URL` = server Supabase produksi
+  `hjqmyjrjiktvdqgjkrvp`). Penguji beta tidak perlu lagi mengisi kolom
+  API — cukup masukkan kode akses. Kolom API di panel tetap ada sebagai
+  override (pindah server); mengosongkannya berarti mode lokal.
+  URL ini bukan rahasia (endpoint publik; kredensialnya kode akses).
+- **v0.5.0 (2026-11-20):** kode akses beta pindah ke server Supabase.
+  Panel punya kolom **API lisensi**: isi URL dasar
+  (`https://xxxxx.supabase.co/functions/v1`) untuk mode server, kosong =
+  mode lokal lama. Mode server: aktivasi dicek ke endpoint
+  `validate-code`, dan setiap Generate memotong 1 generate lewat
+  `consume-generate` (atomik, 5 generate per kode, s.d. 31 Des 2026);
+  status panel menampilkan sisa generate dari server. Aktivasi lokal
+  lama yang tersimpan otomatis dikonfirmasi sekali ke server saat API
+  diisi (tanpa memasukkan ulang kode). Mode server yang tidak
+  terjangkau = Generate ditolak (kuota tidak boleh diakali); mode lokal
+  tetap jalan tanpa hitungan. Paket API (skema + 2 Edge Function +
+  panduan deploy) ada di `supabase-api/`. Diuji headless melawan API
+  tiruan (`test_api_license.py`): validasi, konsumsi 5→0, penolakan
+  saat habis, kode salah, server mati.
+- **v0.4.2 (2026-11-20):** lantai ukuran nama panjang naik dari 3 pt
+  menjadi 4 pt (permintaan Derana). Nama > 12 karakter tetap mengecil
+  proporsional, tapi tidak lebih kecil dari 4 pt. Diuji render L01:
+  UJANG NURMAN ALAMSAH (20 karakter, nama terpanjang di data) tetap
+  muat di dalam persilnya pada 4 pt, tanpa tabrakan baru.
+- **v0.4.1 (2026-11-20):** perbaikan teks persil "tidak rapih" (laporan
+  Derana + PDF L01 1:500 dari QGIS 4.2.2). Akar masalahnya dua, keduanya
+  di `apply_parcel_style` (`engine.py`): **(1)** Di QGIS 3, `QgsPalLayerSettings`
+  TIDAK punya anggota C++ `fontSize`/`textColor`/`fontFamily` (pindah ke
+  `QgsTextFormat`); menulis `settings.fontSize = ...` hanya membuat atribut
+  Python yang hilang saat settings disalin ke labeling — label selama ini
+  dirender dengan format default 10 pt (dua kali ukuran rancangan 5 pt di
+  1:500), sehingga label persil kecil yang berdekatan bertabrakan
+  (MIFTAHUDIN 00865 vs OIS PIRMANSAH 00892, SOPYAN SUGANDA 00853 vs LIYAH
+  00868, UJANG NURMAN ALAMSAH 00895 meluber + menabrak L=207m2). Sekarang
+  format diatur lewat `QgsTextFormat` + `settings.setFormat()` (ukuran
+  sesuai skala, Arial, warna teks panel). **(2)** Ekspresi data-defined
+  Size memakai `greatest()` yang tidak ada di QGIS 3.22 ("Function is not
+  known") — ekspresi gagal parse, nama panjang tidak pernah mengecil.
+  Diganti `max()` (ada sejak QGIS 2.x; UJANG NURMAN ALAMSAH 20 karakter
+  kini 3 pt dan muat di dalam persilnya). Rotasi label mengikuti sumbu
+  persil sempat dicoba lalu DIBATALKAN: properti Rotation berevaluasi
+  benar tapi diabaikan total saat render di sandbox 3.22 (rotasi konstan
+  45° tidak mengubah satu piksel pun), dan arah putar di 4.2.2 tidak bisa
+  diverifikasi dari sini — pada 5 pt + dd Size yang benar, tabrakan sudah
+  hilang tanpa rotasi. Diuji headless: render L01 diperiksa per klaster
+  (atas/tengah/kiri-bawah) — semua 24 label rapi di dalam persil, tanpa
+  tabrakan; render penuh tetap lulus (10 lembar).
+- **v0.4.0 (2026-11-20):** gerbang kode akses beta. Panel punya bagian
+  "Kode Akses Beta": tombol Hitung lembar dan Generate terkunci sampai
+  kode beta yang valid dimasukkan. Validasi di `license.py` — yang
+  disimpan hanya hash SHA-256 kode (kode asli tidak masuk repo),
+  masa beta sampai 31 Des 2026, status aktif tersimpan di QSettings
+  (cukup sekali per mesin). Kode dibuat dengan `gen_beta_codes.py`
+  (format `YUK-XXXXXX-XXXXXX`, 10 kode beta). Jujur: ini gerbang lunak
+  — plugin GPL, siapa pun bisa menghapus pengecekan dari salinannya;
+  langganan sesungguhnya nanti dicek ke server. Diuji headless
+  (`test_access.py`): kode salah + kedaluwarsa ditolak, kode benar
+  membuka tombol, status tersimpan di panel baru, deactivate mengunci
+  lagi, stempel v0.4.0 di footer; render penuh tetap lulus (10 lembar).
 - **v0.1.4 (2026-11-20):** perbaikan bug minimize — dialog yang
   diminimize "hilang" (tidak ada tombol taskbar sendiri karena dia anak
   jendela utama QGIS) dan klik tombol plugin tidak membukanya lagi,

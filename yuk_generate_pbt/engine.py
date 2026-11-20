@@ -751,14 +751,27 @@ def apply_parcel_style(layer, outline_rgb, text_rgb, fields, denominator):
             settings = QgsPalLayerSettings()
             settings.fieldName = expr
             settings.isExpression = True
-            settings.textColor = _qgis_color(text_rgb)
-            settings.fontFamily = "Arial"
+            # Format teks lewat QgsTextFormat (setFormat) — v0.4.1.
+            # Di QGIS 3, QgsPalLayerSettings TIDAK lagi punya anggota
+            # C++ fontSize/textColor/fontFamily/fontSizeUnit (pindah ke
+            # QgsTextFormat); menulis settings.fontSize = ... dsb. hanya
+            # membuat atribut Python yang hilang saat settings disalin
+            # ke labeling, sehingga label selama ini dirender dengan
+            # format default (10 pt, Liberation Sans, #323232) — DUA KALI
+            # lebih besar dari yang dirancang (5 pt di 1:500) dan itulah
+            # penyebab utama label bertabrakan. Dibuktikan probe
+            # probe_format2.py di sandbox 3.22.
             size = label_font_size_pt(denominator)
-            settings.fontSize = size
             try:
-                from qgis.core import QgsUnitTypes
+                from qgis.core import QgsTextFormat, QgsUnitTypes
+                from qgis.PyQt.QtGui import QFont
 
-                settings.fontSizeUnit = QgsUnitTypes.RenderPoints
+                fmt = QgsTextFormat()
+                fmt.setFont(QFont("Arial", size))
+                fmt.setSize(size)
+                fmt.setSizeUnit(QgsUnitTypes.RenderPoints)
+                fmt.setColor(_qgis_color(text_rgb))
+                settings.setFormat(fmt)
             except Exception:
                 pass
             # QGIS 4: Qgis.LabelPlacement.OverPoint (placement di
@@ -833,15 +846,36 @@ def apply_parcel_style(layer, outline_rgb, text_rgb, fields, denominator):
                     fallback=None,
                 )
                 if size_key is not None:
+                    # v0.4.1: pakai max(), BUKAN greatest(). greatest()/least()
+                    # tidak ada di QGIS 3.22 ("Function is not known") sehingga
+                    # ekspresi ini gagal parse dan nama panjang tidak pernah
+                    # mengecil (fallback ke ukuran format) — itulah sebabnya
+                    # UJANG NURMAN ALAMSAH (20 karakter) tetap 5 pt dan
+                    # meluber. max()/min() ada sejak QGIS 2.x, aman di
+                    # 3.22 maupun 4.2.2.
+                    # v0.4.2: lantai ukuran nama panjang naik dari 3 pt
+                    # menjadi 4 pt (permintaan Derana, 2026-11-20 23:27
+                    # WIB). Nama > 12 karakter mengecil proporsional
+                    # (12/panjang * ukuran), tidak lebih kecil dari 4 pt.
                     dd = (
-                        'CASE WHEN length("{f}") > 12 THEN greatest(12.0 / '
-                        'length("{f}") * {s}, 3) ELSE {s} END'
+                        'CASE WHEN length("{f}") > 12 THEN max(12.0 / '
+                        'length("{f}") * {s}, 4) ELSE {s} END'
                     ).format(f=nama, s=size)
                     # QGIS 3.22: tidak ada setDataDefinedProperty (tunggal) —
                     # pola resminya: ambil koleksi, set, kembalikan.
                     props = settings.dataDefinedProperties()
                     props.setProperty(size_key, QgsProperty.fromExpression(dd))
                     settings.setDataDefinedProperties(props)
+            # Rotasi label (v0.4.1, DICOBA lalu DIBATALKAN): properti
+            # data-defined Rotation (main_angle, mengikuti sumbu panjang
+            # persil) terpasang dan berevaluasi benar, TAPI diabaikan
+            # total saat render di sandbox QGIS 3.22 — bahkan rotasi
+            # konstan 45 derajat tidak mengubah satu piksel pun (uji
+            # canvas-rot-45 vs canvas-rot-0 identik). Arah putar di
+            # QGIS 4.2.2 tidak bisa diverifikasi dari sini, jadi rotasi
+            # tidak dipakai: pada 5 pt + dd Size yang benar, tabrakan
+            # sudah hilang tanpa rotasi. Jangan tambah lagi tanpa bukti
+            # render di 4.2.2.
             layer.setLabeling(QgsVectorLayerSimpleLabeling(settings))
             layer.setLabelsEnabled(True)
     layer.triggerRepaint()

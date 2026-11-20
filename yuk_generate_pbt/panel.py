@@ -62,6 +62,7 @@ from qgis.PyQt.QtWidgets import (
 WRAP_ALL_ROWS = _enum_value(QFormLayout, "RowWrapPolicy", "WrapAllRows", 2)
 
 from . import engine
+from . import license as lic
 
 SCALES = ["Auto", "1:250", "1:500", "1:1000", "1:1500", "1:2000", "1:2500"]
 PARCEL_COLORS = [
@@ -123,8 +124,21 @@ class YukGeneratePbtPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.settings = QSettings("YukGeneratePBT", "YukGeneratePBT")
+        # API lisensi (v0.5.0, bawaan v0.5.1): bila belum pernah diatur,
+        # pakai server bawaan (DEFAULT_API_BASE_URL) dan simpan sebagai
+        # nilai awal — penguji tidak perlu mengisi apa pun. Nilai ""
+        # yang tersimpan sengaja berarti mode lokal.
+        _stored_api = self.settings.value(lic.LICENSE_KEY_API, None)
+        if _stored_api is None:
+            _stored_api = lic.DEFAULT_API_BASE_URL
+            self.settings.setValue(lic.LICENSE_KEY_API, _stored_api)
+        lic.set_api_base(_stored_api or "")
         self._build_ui()
         self._load_history()
+        # Bila API baru diisi dan ada aktivasi lokal tersimpan, konfirmasi
+        # sekali ke server supaya kuota terhitung (tanpa minta kode ulang).
+        lic.ensure_server_activation()
+        self._refresh_license_ui()
 
     # ------------------------------------------------------------------
     def _build_ui(self):
@@ -146,6 +160,38 @@ class YukGeneratePbtPanel(QWidget):
         title.setWordWrap(True)
         header.addWidget(title)
         root.addLayout(header)
+
+        # Gerbang kode akses beta (v0.4.0, API server v0.5.0): Hitung
+        # lembar / Generate terkunci sampai kode beta yang valid
+        # dimasukkan. Status aktif disimpan di QSettings, jadi cukup
+        # sekali per mesin. Kolom API lisensi: isi URL dasar Supabase
+        # (.../functions/v1) untuk mode server (kuota 5 generate/kode
+        # dihitung di server); kosong = mode lokal (tanpa hitungan).
+        access_box = QGroupBox("Kode Akses Beta")
+        access = QVBoxLayout(access_box)
+        access_row = QHBoxLayout()
+        self.code_edit = QLineEdit()
+        self.code_edit.setPlaceholderText("cth. YUK-XXXXXX-XXXXXX")
+        self.activate_button = QPushButton("Aktifkan")
+        self.activate_button.clicked.connect(self._on_activate)
+        access_row.addWidget(self.code_edit)
+        access_row.addWidget(self.activate_button)
+        access.addLayout(access_row)
+        self.license_status = QLabel(lic.status_text())
+        self.license_status.setWordWrap(True)
+        access.addWidget(self.license_status)
+        api_row = QHBoxLayout()
+        api_label = QLabel("API lisensi:")
+        self.api_edit = QLineEdit()
+        self.api_edit.setPlaceholderText(
+            "https://xxxxx.supabase.co/functions/v1 (kosong = lokal)"
+        )
+        self.api_edit.setText(lic.get_api_base())
+        self.api_edit.editingFinished.connect(self._on_api_changed)
+        api_row.addWidget(api_label)
+        api_row.addWidget(self.api_edit)
+        access.addLayout(api_row)
+        root.addWidget(access_box)
 
         form = QFormLayout()
         form.setRowWrapPolicy(WRAP_ALL_ROWS)
@@ -434,7 +480,40 @@ class YukGeneratePbtPanel(QWidget):
             raise ValueError("Pilih folder output.")
         return opts
 
+    def _refresh_license_ui(self):
+        active = lic.is_activated()
+        self.license_status.setText(lic.status_text())
+        self.code_edit.setEnabled(not active)
+        self.activate_button.setEnabled(not active)
+        self.count_button.setEnabled(active)
+        self.generate_button.setEnabled(active)
+
+    def _on_api_changed(self):
+        """Simpan URL API lisensi; ganti mode validasi. Bila API baru
+        diisi dan ada aktivasi lokal, konfirmasi sekali ke server."""
+        url = self.api_edit.text().strip()
+        lic.set_api_base(url)
+        self.settings.setValue(lic.LICENSE_KEY_API, url)
+        if url:
+            lic.ensure_server_activation()
+            self._log("API lisensi: mode server.")
+        else:
+            self._log("API lisensi: mode lokal.")
+        self._refresh_license_ui()
+
+    def _on_activate(self):
+        code = self.code_edit.text().strip()
+        if not code:
+            self._log("Gagal: masukkan kode akses beta.")
+            return
+        ok, msg = lic.activate(code)
+        self._log(("Aktif: " if ok else "Gagal: ") + msg)
+        self._refresh_license_ui()
+
     def _on_count(self):
+        if not lic.is_activated():
+            self._log("Gagal: masukkan kode akses beta dulu.")
+            return
         try:
             opts = self._validate_common()
             from qgis.core import QgsVectorLayer
@@ -477,6 +556,18 @@ class YukGeneratePbtPanel(QWidget):
             self._log("Gagal: {}".format(exc))
 
     def _on_generate(self):
+        if not lic.is_activated():
+            self._log("Gagal: masukkan kode akses beta dulu.")
+            return
+        # v0.5.0: 1 Generate = 1 generate kuota. Potong DULU di server
+        # (mode server) supaya generate yang gagal di tengah jalan tetap
+        # terhitung — kuota tidak bisa diakali dengan membatalkan.
+        ok, msg, _remaining = lic.consume_generate()
+        if not ok:
+            self._log("Gagal: {}".format(msg))
+            self._refresh_license_ui()
+            return
+        self._log("Kuota: {}".format(msg))
         try:
             opts = self._validate_common()
             self.generate_button.setEnabled(False)
@@ -500,7 +591,8 @@ class YukGeneratePbtPanel(QWidget):
         except Exception as exc:
             self._log("Gagal: {}".format(exc))
         finally:
-            self.generate_button.setEnabled(True)
+            self.generate_button.setEnabled(lic.is_activated())
+            self._refresh_license_ui()
 
     # ------------------------------------------------------------------
     def _load_history(self):
