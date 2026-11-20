@@ -1029,7 +1029,9 @@ COORD_SYSTEMS = (
 )
 DEFAULT_COORD_SYSTEM = "WGS 1984 TM3 Zona 48.2"
 
-# Nilai default isi frame = isi template PBTF_WARDOY.qpt saat ini.
+# Nilai default isi frame = isi template contoh PBTF_Demo_YukTech.qpt
+# (nama demo/promosi ig:@yuktech + PT Kebakaran Jenggot, BUKAN nama asli
+# Cianjur — plugin ini dibagikan ke publik). Nama tempat tetap Cianjur.
 FRAME_DEFAULTS = {
     "coord_system": DEFAULT_COORD_SYSTEM,
     "area_kind": "Desa",
@@ -1038,16 +1040,16 @@ FRAME_DEFAULTS = {
     "admin_name": "Cianjur",
     "kecamatan": "Cikalongkulon",
     "provinsi": "Jawa Barat",
-    "surveyor_name": "Moch Ikhsan Panca Utama",
-    "surveyor_license": "2-1501-19",
-    "leader_org": "PT. SANGGA BUANA NUSANTARA",
-    "leader_name": "Ir. Rudy Themonady L",
+    "surveyor_name": "ig:@yuktech",
+    "surveyor_license": "9-6969-69",
+    "leader_org": "PT Kebakaran Jenggot",
+    "leader_name": "ig:@yuktech",
     "leader_position": "Direktur Utama",
-    "usage_role": "Wakil Ketua Bidang Fisik",
-    "usage_name": "Dede Kuswana S.SIT",
-    "usage_nip": "197306141994031002",
-    "executor_pt": "PT. SANGGA BUANA NUSANTARA",
-    "executor_address": "Jl. Kalibata Timur No. 12 Jakarta Selatan",
+    "usage_role": "Wakil Raja Iblis",
+    "usage_name": "ig:@yuktech",
+    "usage_nip": "123456789",
+    "executor_pt": "PT Kebakaran Jenggot",
+    "executor_address": "Jl. Kebakaran Jenggot No. 69, Jakarta Selatan",
 }
 
 
@@ -1062,15 +1064,20 @@ def _frame_values(opts):
 
 
 def _apply_frame_texts(layout, frame):
-    """Tulis 9 butir isi frame ke label layout (template PBTF_WARDOY.qpt).
+    """Tulis 9 butir isi frame ke label layout.
 
     Label di template tidak punya id — dikenali dari isi teks bawaannya
-    (dan posisi y untuk dua label "PT. SANGGA BUANA NUSANTARA" yang
-    kembar: y kecil = pimpinan, y besar = pelaksana). Dipanggil pada
-    layout yang masih berisi teks template, SEBELUM _apply_label_values,
-    supaya token [%"b"%] / [%"tglF"%] di label yang sama tetap utuh dan
-    diganti nilainya sesudahnya. Mengembalikan daftar peringatan untuk
-    butir yang tidak ketemu (template lain / template sudah diubah).
+    (dan posisi y untuk label yang kembar). Jangkar teks menerima DUA
+    versi template: PBTF_WARDOY.qpt (nama asli Cianjur) dan
+    PBTF_Demo_YukTech.qpt (nama demo ig:@yuktech / PT Kebakaran Jenggot).
+    Dua label PT yang kembar dibedakan lewat posisi y (kecil = pimpinan,
+    besar = pelaksana); tiga label "ig:@yuktech" yang kembar juga
+    dibedakan lewat y (kecil = petugas ukur, tengah = pimpinan,
+    besar = penggunaan). Dipanggil pada layout yang masih berisi teks
+    template, SEBELUM _apply_label_values, supaya token [%"b"%] /
+    [%"tglF"%] di label yang sama tetap utuh dan diganti nilainya
+    sesudahnya. Mengembalikan daftar peringatan untuk butir yang tidak
+    ketemu (template lain / template sudah diubah).
     """
     from qgis.core import QgsLayoutItemLabel
 
@@ -1090,11 +1097,21 @@ def _apply_frame_texts(layout, frame):
 
     # Dua label PT yang kembar — bedakan lewat posisi y.
     pt_items = sorted(
-        [it for it in labels if it.text() == "PT. SANGGA BUANA NUSANTARA"],
+        [it for it in labels
+         if it.text() in ("PT. SANGGA BUANA NUSANTARA", "PT Kebakaran Jenggot")],
         key=_y,
     )
     leader_org_item = pt_items[0] if pt_items else None
     executor_pt_item = pt_items[1] if len(pt_items) > 1 else None
+
+    # Tiga label "ig:@yuktech" (template demo) — bedakan lewat posisi y.
+    ig_items = sorted(
+        [it for it in labels if it.text() == "ig:@yuktech"],
+        key=_y,
+    )
+    ig_surveyor_item = ig_items[0] if ig_items else None
+    ig_leader_item = ig_items[1] if len(ig_items) > 1 else None
+    ig_usage_item = ig_items[2] if len(ig_items) > 2 else None
 
     found = set()
     for item in labels:
@@ -1159,7 +1176,7 @@ def _apply_frame_texts(layout, frame):
             elif text == "Moch Ikhsan Panca Utama":
                 item.setText(frame["surveyor_name"])
                 found.add("surveyor_name")
-            elif text == "2-1501-19":
+            elif text in ("2-1501-19", "9-6969-69"):
                 item.setText(frame["surveyor_license"])
                 found.add("surveyor_license")
             elif text == "Ir. Rudy Themonady L":
@@ -1171,14 +1188,33 @@ def _apply_frame_texts(layout, frame):
             elif text == "Dede Kuswana S.SIT":
                 item.setText(frame["usage_name"])
                 found.add("usage_name")
-            elif text == "NIP. 197306141994031002":
+            elif text in ("NIP. 197306141994031002", "NIP. 123456789"):
                 item.setText("NIP. {}".format(frame["usage_nip"]))
                 found.add("usage_nip")
-            elif text == "Jl. Kalibata Timur No. 12 Jakarta Selatan":
+            elif text in ("Jl. Kalibata Timur No. 12 Jakarta Selatan",
+                          "Jl. Kebakaran Jenggot No. 69, Jakarta Selatan"):
                 item.setText(frame["executor_address"])
                 found.add("executor_address")
         except Exception:
             continue
+    if ig_surveyor_item is not None:
+        try:
+            ig_surveyor_item.setText(frame["surveyor_name"])
+            found.add("surveyor_name")
+        except Exception:
+            pass
+    if ig_leader_item is not None:
+        try:
+            ig_leader_item.setText(frame["leader_name"])
+            found.add("leader_name")
+        except Exception:
+            pass
+    if ig_usage_item is not None:
+        try:
+            ig_usage_item.setText(frame["usage_name"])
+            found.add("usage_name")
+        except Exception:
+            pass
     if leader_org_item is not None:
         try:
             leader_org_item.setText(frame["leader_org"])

@@ -131,6 +131,8 @@ def main():
         # Nilai default template TIDAK boleh tersisa di label frame.
         for stale in ["Gudang", "Cikalongkulon", "Moch Ikhsan", "Dede Kuswana",
                       "SANGGA BUANA", "Kalibata Timur", "Wakil Ketua Bidang Fisik",
+                      "ig:@yuktech", "PT Kebakaran Jenggot", "Wakil Raja Iblis",
+                      "9-6969-69", "123456789",
                       "Direktur Utama"]:
             assert stale not in joined, "nilai default masih ada di .qgs: {}".format(stale)
         print("FRAME + QGS: LULUS")

@@ -213,6 +213,17 @@ bisa; ini buktinya.
   UTM 48S, dst.) — 16/16 teks benar di .qgs hasil muat ulang, tanpa
   sisa nilai default; render penuh tetap lulus (10 lembar + .qgs 10
   layout + isi frame default).
+- **v0.5.5 (2026-11-21):** nilai default isi frame diganti ke nama
+  demo/promosi dari template contoh `PBTF_Demo_YukTech.qpt`
+  (Petugas Ukur "ig:@yuktech" + lisensi 9-6969-69; Pimpinan "PT
+  Kebakaran Jenggot" + "ig:@yuktech"; Penggunaan "Wakil Raja Iblis" +
+  "ig:@yuktech" + NIP 123456789; Pelaksana "PT Kebakaran Jenggot" +
+  alamat Jl. Kebakaran Jenggot No. 69, Jakarta Selatan) — bukan lagi
+  nama asli Cianjur, karena plugin ini dibagikan ke publik. Nama tempat
+  (Gudang/Cianjur) tetap. Pencocokan label frame (`_apply_frame_texts`)
+  menerima jangkar teks DUA versi template (WARDOY + demo); tiga label
+  "ig:@yuktech" yang kembar dibedakan lewat posisi y (kecil = petugas
+  ukur, tengah = pimpinan, besar = penggunaan).
 - **v0.5.4 (2026-11-21):** email kontak di metadata diganti
   mfadllah4th@gmail.com (seluruh source
   dicek — hanya metadata.txt yang memakai email itu). Isi plugin

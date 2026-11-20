@@ -130,11 +130,11 @@ def main():
         qgs_joined = "\n".join(qgs_texts)
         for needle in ["Sistem Koordinat WGS 1984 TM3 Zona 48.2",
                        "Gudang", "Cikalongkulon", "Kabupaten : Cianjur",
-                       "Provinsi : Jawa Barat", "Moch Ikhsan Panca Utama",
-                       "2-1501-19", "Ir. Rudy Themonady L", "Direktur Utama",
-                       "Wakil Ketua Bidang Fisik", "Dede Kuswana S.SIT",
-                       "NIP. 197306141994031002", "PT. SANGGA BUANA NUSANTARA",
-                       "Jl. Kalibata Timur No. 12 Jakarta Selatan",
+                       "Provinsi : Jawa Barat", "ig:@yuktech",
+                       "9-6969-69", "Direktur Utama",
+                       "Wakil Raja Iblis",
+                       "NIP. 123456789", "PT Kebakaran Jenggot",
+                       "Jl. Kebakaran Jenggot No. 69, Jakarta Selatan",
                        "Cianjur, 20 November 2026"]:
             assert needle in qgs_joined, "isi frame default tidak ada di .qgs: {}".format(needle)
         print("QGS: 10 layout + isi frame default OK")
