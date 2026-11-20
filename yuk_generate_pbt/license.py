@@ -52,16 +52,16 @@ BETA_GENERATES_PER_CODE = 5
 # hash barunya di sini (dan/atau seed ke Supabase — lihat
 # supabase-api/schema.sql).
 CODE_HASHES = {
-    "136a279c2364c7d02ea759e8239710d50d7e7b0d6156b9e73497bb3a0540b643",
-    "32bf3d308e37d2afaf0f1c359e107509de5d49b456c1daa89216270524bd61ed",
-    "3b8f19f9af0614948cc6dc591d2fb49aaebd92eb5239e2620225b88916cf5a22",
-    "6fb638c2f60d17a25382aacf7d23e01ca959e248ecbb939f9322250822565014",
-    "87b2cd963aa93abfa8001e49a0f4f64a383695e71782487642e9c01ae3855d96",
-    "9beda863a473e925e058a7a78494f6648240be4e98e6fcca447cd3dd88a9a599",
-    "a455038d3e3e2874d82beb8e17ddef6e18b5ed70a0cc2c2812f992528a897a38",
-    "aab677228accfd360c4a4c69f19419903942db881af50ec57c2b915b13f7f3b8",
-    "c76a4c48b3e1a042b70b0b4a56e6807b66ff78eec5b73b10a9486ad5d8de8565",
-    "d77b8d867c449f8deb32873ad165399d01e5e7813ee4ca7f247a06362d89123a",
+    "136a279c2364c7d02ea759e8239710d50d7e7b0d6156b9e73497bb3a0540b643",  # pragma: allowlist secret
+    "32bf3d308e37d2afaf0f1c359e107509de5d49b456c1daa89216270524bd61ed",  # pragma: allowlist secret
+    "3b8f19f9af0614948cc6dc591d2fb49aaebd92eb5239e2620225b88916cf5a22",  # pragma: allowlist secret
+    "6fb638c2f60d17a25382aacf7d23e01ca959e248ecbb939f9322250822565014",  # pragma: allowlist secret
+    "87b2cd963aa93abfa8001e49a0f4f64a383695e71782487642e9c01ae3855d96",  # pragma: allowlist secret
+    "9beda863a473e925e058a7a78494f6648240be4e98e6fcca447cd3dd88a9a599",  # pragma: allowlist secret
+    "a455038d3e3e2874d82beb8e17ddef6e18b5ed70a0cc2c2812f992528a897a38",  # pragma: allowlist secret
+    "aab677228accfd360c4a4c69f19419903942db881af50ec57c2b915b13f7f3b8",  # pragma: allowlist secret
+    "c76a4c48b3e1a042b70b0b4a56e6807b66ff78eec5b73b10a9486ad5d8de8565",  # pragma: allowlist secret
+    "d77b8d867c449f8deb32873ad165399d01e5e7813ee4ca7f247a06362d89123a",  # pragma: allowlist secret
 }
 
 LICENSE_KEY_HASH = "license/code_hash"
@@ -119,7 +119,7 @@ def is_expired(today=None):
         stored = _settings().value(LICENSE_KEY_EXPIRES, "")
         if stored:
             expires = stored
-    except Exception:
+    except Exception:  # nosec B110  # best-effort: kegagalan opsional diabaikan
         pass
     return today > expires
 
@@ -150,7 +150,7 @@ def _api_post(path, payload):
         },
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=API_TIMEOUT) as resp:
+    with urllib.request.urlopen(req, timeout=API_TIMEOUT) as resp:  # nosec B310  # hanya HTTPS ke endpoint API lisensi (Supabase); sertifikat diverifikasi default urllib
         return json.loads(resp.read().decode("utf-8"))
 
 
@@ -215,7 +215,7 @@ def consume_generate():
         remaining = res.get("generates_remaining")
         try:
             _settings().setValue(LICENSE_KEY_REMAINING, remaining)
-        except Exception:
+        except Exception:  # nosec B110  # best-effort: kegagalan opsional diabaikan
             pass
         return True, "Sisa {} generate.".format(remaining), remaining
     return False, res.get("reason", "Gagal memakai generate."), None
@@ -315,7 +315,7 @@ def ensure_server_activation():
             settings.setValue(LICENSE_KEY_SERVER, "true")
         else:
             deactivate()
-    except Exception:
+    except Exception:  # nosec B110  # best-effort: kegagalan opsional diabaikan
         pass
 
 
@@ -368,7 +368,7 @@ def deactivate():
             LICENSE_KEY_SERVER,
         ):
             settings.remove(key)
-    except Exception:
+    except Exception:  # nosec B110  # best-effort: kegagalan opsional diabaikan
         pass
 
 

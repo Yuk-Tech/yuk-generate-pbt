@@ -15,7 +15,7 @@ bisa; ini buktinya.
 
 | File | Isi |
 |---|---|
-| `metadata.txt` | Metadata plugin (nama "Yuk Generate PBT! — By @muhfadllah", versi 0.5.7, QGIS ≥ 3.22, author @Muhfadllah) |
+| `metadata.txt` | Metadata plugin (nama "Yuk Generate PBT! — By @muhfadllah", versi 0.5.8, QGIS ≥ 3.22, author @Muhfadllah) |
 | `__init__.py` | Titik masuk — `classFactory()` |
 | `yuk_generate_pbt.py` | Kelas plugin: tombol toolbar + menu, buka/tutup sidebar (QDockWidget) |
 | `panel.py` | Panel sidebar PyQt: kode akses beta, pemilih GPKG/QPT/ECW, skala, warna, varian, form pengesahan, isi frame, format, riwayat, tombol Tutup |
@@ -154,6 +154,17 @@ Contoh file GPKG yang sudah sesuai struktur ini:
 
 ### Changelog
 
+- **v0.5.8 (2026-11-21):** perbaikan keamanan untuk upload
+  plugins.qgis.org — v0.5.7 diblokir pemindai keamanan situs (2 temuan
+  kritis: Bandit 23 + Secrets Detection 10). Semua 33 temuan ternyata
+  positif palsu / pola sengaja dan kini ditandai di kode: 10 hash SHA-256
+  kode beta di `license.py` diberi `# pragma: allowlist secret`
+  (hash dari kode yang sudah publik di deskripsi — bukan rahasia);
+  `urlopen` ke API Supabase diberi `# nosec B310` (hanya HTTPS ke
+  endpoint tetap, sertifikat diverifikasi default urllib); 22 blok
+  `try/except: pass/continue` (best-effort, kegagalan opsional)
+  diberi `# nosec B110/B112`. Verifikasi lokal: Bandit 0 temuan,
+  detect-secrets 0 temuan. Isi plugin sama dengan v0.5.7.
 - **v0.5.7 (2026-11-21):** perbaikan metadata untuk upload
   plugins.qgis.org — validator situs menolak zip v0.5.6 karena field
   `tracker` tidak ada (dok QGIS menyebutnya opsional, tapi validator
@@ -478,6 +489,7 @@ A sample GPKG file following this structure:
 
 ### Recent changes
 
+- **v0.5.8 (2026-11-21):** security-scan fix for the plugins.qgis.org upload — v0.5.7 was blocked by the site scanner (2 critical findings: 23 Bandit + 10 Secrets Detection). All 33 findings were false positives / deliberate patterns and are now marked in the code: the 10 SHA-256 beta-code hashes in `license.py` carry `# pragma: allowlist secret` (hashes of codes already published in the description — not secrets); the `urlopen` call to the Supabase API carries `# nosec B310` (HTTPS-only to a fixed endpoint, certificates verified by urllib's default); the 22 `try/except: pass/continue` blocks (best-effort, non-fatal failures) carry `# nosec B110/B112`. Verified locally: Bandit 0 findings, detect-secrets 0 findings. Plugin content identical to v0.5.7.
 - **v0.5.7 (2026-11-21):** metadata fix for the plugins.qgis.org upload — the site validator rejected the v0.5.6 zip because the `tracker` field was missing (the QGIS docs call it optional, but the site validator requires it). Added `tracker` (the repo's GitHub Issues page) and `homepage` (the repo page, as there is no separate website yet) — all three links (homepage, tracker, repository) are now valid and public, as the upload checklist requires. Plugin content identical to v0.5.6.
 - **v0.5.6 (2026-11-21):** READMEs (repo + plugin) are now bilingual (Indonesian + English); all explanations promote Instagram **@yuktech**; added links to download the sample QPT template (Google Drive) and the sample GPKG; **all 10 beta access codes are listed in the description** (free, for feedback — contact @yuktech); added the suggested-layer guide for GPKG files. Metadata stays English-only. The detailed changelog remains in Indonesian (see the Bahasa Indonesia section above).
 - **v0.5.5 (2026-11-21):** default frame values changed to the demo/promotional names from the sample template `PBTF_Demo_YukTech.qpt` (Surveyor "ig:@yuktech" + license 9-6969-69; Leader "PT Kebakaran Jenggot" + "ig:@yuktech"; Usage "Wakil Raja Iblis" + "ig:@yuktech" + NIP 123456789; Executor "PT Kebakaran Jenggot" + address Jl. Kebakaran Jenggot No. 69, Jakarta Selatan) — no longer the real Cianjur names, because this plugin is shared publicly. Place names (Gudang/Cianjur) unchanged. Frame-label matching (`_apply_frame_texts`) accepts anchor texts from BOTH template versions (WARDOY + demo); the three identical "ig:@yuktech" labels are told apart by y position (small = surveyor, middle = leader, large = usage).

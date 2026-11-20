@@ -772,7 +772,7 @@ def apply_parcel_style(layer, outline_rgb, text_rgb, fields, denominator):
                 fmt.setSizeUnit(QgsUnitTypes.RenderPoints)
                 fmt.setColor(_qgis_color(text_rgb))
                 settings.setFormat(fmt)
-            except Exception:
+            except Exception:  # nosec B110  # best-effort: kegagalan opsional diabaikan
                 pass
             # QGIS 4: Qgis.LabelPlacement.OverPoint (placement di
             # QgsPalLayerSettings bertipe Qgis::LabelPlacement). QGIS 3:
@@ -928,7 +928,7 @@ def detect_pk_column(layer):
         indices = layer.primaryKeyAttributes()
         if indices:
             return layer.fields().at(indices[0]).name()
-    except Exception:
+    except Exception:  # nosec B110  # best-effort: kegagalan opsional diabaikan
         pass
     names = [f.name() for f in layer.fields()]
     for candidate in ("fid", "FID", "ogc_fid", "id"):
@@ -988,7 +988,7 @@ def _find_item_by_id_ci(layout, wanted):
         try:
             if (item.id() or "").lower() == wanted:
                 return item
-        except Exception:
+        except Exception:  # nosec B112  # best-effort: lanjut ke fitur berikutnya
             continue
     return None
 
@@ -1006,7 +1006,7 @@ def _snapshot_label_texts(layout):
         try:
             if isinstance(item, QgsLayoutItemLabel):
                 snap.append((item, item.text()))
-        except Exception:
+        except Exception:  # nosec B112  # best-effort: lanjut ke fitur berikutnya
             continue
     return snap
 
@@ -1015,7 +1015,7 @@ def _restore_label_texts(snapshot):
     for item, text in snapshot:
         try:
             item.setText(text)
-        except Exception:
+        except Exception:  # nosec B112  # best-effort: lanjut ke fitur berikutnya
             continue
 
 
@@ -1092,7 +1092,7 @@ def _apply_frame_texts(layout, frame):
         try:
             if isinstance(item, QgsLayoutItemLabel):
                 labels.append(item)
-        except Exception:
+        except Exception:  # nosec B112  # best-effort: lanjut ke fitur berikutnya
             continue
 
     # Dua label PT yang kembar — bedakan lewat posisi y.
@@ -1195,37 +1195,37 @@ def _apply_frame_texts(layout, frame):
                           "Jl. Kebakaran Jenggot No. 69, Jakarta Selatan"):
                 item.setText(frame["executor_address"])
                 found.add("executor_address")
-        except Exception:
+        except Exception:  # nosec B112  # best-effort: lanjut ke fitur berikutnya
             continue
     if ig_surveyor_item is not None:
         try:
             ig_surveyor_item.setText(frame["surveyor_name"])
             found.add("surveyor_name")
-        except Exception:
+        except Exception:  # nosec B110  # best-effort: kegagalan opsional diabaikan
             pass
     if ig_leader_item is not None:
         try:
             ig_leader_item.setText(frame["leader_name"])
             found.add("leader_name")
-        except Exception:
+        except Exception:  # nosec B110  # best-effort: kegagalan opsional diabaikan
             pass
     if ig_usage_item is not None:
         try:
             ig_usage_item.setText(frame["usage_name"])
             found.add("usage_name")
-        except Exception:
+        except Exception:  # nosec B110  # best-effort: kegagalan opsional diabaikan
             pass
     if leader_org_item is not None:
         try:
             leader_org_item.setText(frame["leader_org"])
             found.add("leader_org")
-        except Exception:
+        except Exception:  # nosec B110  # best-effort: kegagalan opsional diabaikan
             pass
     if executor_pt_item is not None:
         try:
             executor_pt_item.setText(frame["executor_pt"])
             found.add("executor_pt")
-        except Exception:
+        except Exception:  # nosec B110  # best-effort: kegagalan opsional diabaikan
             pass
 
     wanted = {
@@ -1273,7 +1273,7 @@ def _apply_label_values(layout, values):
                 new = pat.sub(value, new)
             if new != text:
                 item.setText(new)
-        except Exception:
+        except Exception:  # nosec B112  # best-effort: lanjut ke fitur berikutnya
             continue
 
 
@@ -1285,7 +1285,7 @@ def _layer_has_features(layer):
     try:
         if layer.featureCount() > 0:
             return True
-    except Exception:
+    except Exception:  # nosec B110  # best-effort: kegagalan opsional diabaikan
         pass
     try:
         return next(layer.getFeatures(), None) is not None
@@ -1388,7 +1388,7 @@ def _build_qgs_project(opts, groups, boxes, fields, pk_col, dividers, frame):
             raise ValueError("Item peta 'Map 1' tidak ditemukan di template QPT.")
         try:
             map_item.setKeepLayerSet(True)
-        except Exception:
+        except Exception:  # nosec B110  # best-effort: kegagalan opsional diabaikan
             pass
         map_item.setExtent(QgsRectangle(*group.extent))
         map_item.setLayers(
@@ -1416,7 +1416,7 @@ def _build_qgs_project(opts, groups, boxes, fields, pk_col, dividers, frame):
                     m = re.search(r"\[%.*?map_scale.*?%\]", text, re.S)
                     if m:
                         item.setText(text[: m.start()] + group.scale + text[m.end():])
-            except Exception:
+            except Exception:  # nosec B112  # best-effort: lanjut ke fitur berikutnya
                 continue
         for wanted, path in (
             ("logo", opts.get("logo_path")),
@@ -1516,7 +1516,7 @@ def render_batch(opts):
     # layer dibuka di kanvas.
     try:
         map_item.setKeepLayerSet(True)
-    except Exception:
+    except Exception:  # nosec B110  # best-effort: kegagalan opsional diabaikan
         pass
     rect = map_item.rect()
     map_mm = (rect.width(), rect.height())
@@ -1599,7 +1599,7 @@ def render_batch(opts):
                     m = re.search(r"\[%.*?map_scale.*?%\]", text, re.S)
                     if m:
                         item.setText(text[: m.start()] + group.scale + text[m.end():])
-            except Exception:
+            except Exception:  # nosec B112  # best-effort: lanjut ke fitur berikutnya
                 continue
         # Gambar logo / tanda tangan (id template huruf besar; cocokkan
         # tanpa memperhatikan huruf).
