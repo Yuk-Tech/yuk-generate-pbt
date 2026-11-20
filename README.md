@@ -52,7 +52,7 @@ YUK-YS3YNM-W3YPC2
 
 Contoh template PBTF siap pakai (sudah berisi nama demo "ig:@yuktech" dan "PT Kebakaran Jenggot", bukan nama asli) bisa diunduh di sini:
 
-**[Download contoh template QPT (Google Drive)](https://drive.google.com/drive/folders/17w9zbwWBJ7eAM6O0-dlcQSDCBQyDR0cc?usp=drive_link)**
+**[Download contoh template QPT (Google Drive)](https://drive.google.com/file/d/1ejQQAfs3PYvlo8Y-K8dT8X4UV2D1lpjI/view?usp=drive_link)**
 
 ### Saran layer untuk file GPKG
 
@@ -135,7 +135,7 @@ YUK-YS3YNM-W3YPC2
 
 A ready-to-use sample PBTF template (already filled with the demo names "ig:@yuktech" and "PT Kebakaran Jenggot", not real names) is available here:
 
-**[Download the sample QPT template (Google Drive)](https://drive.google.com/drive/folders/17w9zbwWBJ7eAM6O0-dlcQSDCBQyDR0cc?usp=drive_link)**
+**[Download the sample QPT template (Google Drive)](https://drive.google.com/file/d/1ejQQAfs3PYvlo8Y-K8dT8X4UV2D1lpjI/view?usp=drive_link)**
 
 ### Suggested layer for your GPKG file
 
