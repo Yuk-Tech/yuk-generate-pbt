@@ -1,37 +1,37 @@
-# Yuk Generate PBT! — Plugin QGIS
+# Yuk Generate PBT! — QGIS Plugin
 
-Plugin QGIS untuk generate **Peta Bidang Tanah (PBTF)** dari GeoPackage + template QPT. Port plugin dari aplikasi desktop "Yuk Generate PBT! by @Muhfadllah".
+QGIS plugin to generate **Peta Bidang Tanah (PBTF)** land parcel maps from a GeoPackage + QPT template. QGIS port of the desktop app "Yuk Generate PBT! by @Muhfadllah".
 
-## Fitur
+## Features
 
-- Grouping hibrida (blok oleh pembagi + grid + greedy + min-10) — 115 persil jadi 10 lembar @1:500
-- Label 3 baris (NAMA / NIB / L=...m2), satu warna teks, tanpa wrap
-- Render PDF per lembar (varian dengan/tanpa citra ECW) + ZIP
-- **Satu proyek QGIS (.qgs) berisi semua lembar** — bisa diedit di QGIS sebelum diekspor ke PDF
-- **Isi frame 9 butir**: sistem koordinat, desa/kelurahan, kabupaten/kota, kecamatan, provinsi, petugas ukur + lisensi, pimpinan, penggunaan, pelaksana
-- **Beta: butuh kode akses** — Hitung lembar dan Generate terkunci sampai kode akses beta dimasukkan (berlaku sampai 31 Des 2026)
+- Hybrid grouping (divider blocks + grid + greedy + min-10) — 115 parcels become 10 sheets @1:500
+- 3-line labels (NAMA / NIB / L=...m2), single text color, no wrap
+- PDF render per sheet (with/without ECW imagery variants) + ZIP
+- **One QGIS project (.qgs) with all sheets** — editable in QGIS before exporting to PDF
+- **9 frame fields**: coordinate system, village/subdistrict, regency/city, district, province, surveyor + license, leader, usage, executor
+- **Beta: requires an access code** — Count sheets and Generate are locked until a beta access code is entered (valid until 31 Dec 2026)
 
-## Instalasi
+## Installation
 
-- **QGIS Plugin Manager** (setelah rilis di plugins.qgis.org): cari "Yuk Generate PBT!", instal.
-- **Manual / dari ZIP**: unduh rilis ZIP, di QGIS buka `Plugins → Manage and Install Plugins → Install from ZIP`, pilih file ZIP-nya. Atau salin folder `yuk_generate_pbt/` ke folder plugin QGIS (`%APPDATA%\QGIS\QGIS3\profiles\default\python\plugins\` di Windows).
+- **QGIS Plugin Manager** (after release on plugins.qgis.org): search "Yuk Generate PBT!" and install.
+- **Manual / from ZIP**: download the release ZIP, in QGIS open `Plugins → Manage and Install Plugins → Install from ZIP`, and select the ZIP file. Or copy the `yuk_generate_pbt/` folder into the QGIS plugins folder (`%APPDATA%\QGIS\QGIS3\profiles\default\python\plugins\` on Windows).
 
-## Pakai
+## Usage
 
-1. Buka sidebar plugin (toolbar / menu Plugins).
-2. Masukkan kode akses beta (bagian "Kode Akses Beta") lalu Aktifkan.
-3. Pilih GeoPackage + layer + template QPT (+ ECW bila pakai citra).
-4. Atur skala, warna, dan isi frame.
-5. Generate — PDF + ZIP + file `.qgs` tersimpan di folder output.
+1. Open the plugin sidebar (toolbar / Plugins menu).
+2. Enter your beta access code ("Beta Access Code" section) and click Activate.
+3. Pick a GeoPackage + layer + QPT template (+ ECW for imagery).
+4. Set the scale, colors, and frame fields.
+5. Generate — the PDFs + ZIP + `.qgs` file are saved to the output folder.
 
-## Struktur repo
+## Repository structure
 
 ```
 yuk_generate_pbt/   plugin (metadata.txt, engine.py, panel.py, ...)
 ```
 
-File `test_*.py` adalah uji headless (QGIS 3.22 di sandbox E2B).
+The `test_*.py` files are headless tests (QGIS 3.22 in an E2B sandbox).
 
-## Lisensi
+## License
 
-GPL-3.0 — lihat `LICENSE`.
+GPL-3.0 — see `LICENSE`.
