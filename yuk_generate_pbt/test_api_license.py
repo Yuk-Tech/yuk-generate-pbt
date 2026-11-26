@@ -16,8 +16,8 @@ Memeriksa:
      kuota tidak berkurang.
   2c. Migrasi: aktivasi lama (hanya hash, tanpa kode tersimpan) tidak
      aktif; masukkan ulang kode -> aktif + kode tersimpan.
-  3. Panel: kolom API tersimpan, aktivasi lewat panel menghidupkan
-     tombol, status menampilkan sisa generate dari server.
+  3. Panel (v0.6.1): tidak ada kolom API; aktivasi lewat panel
+     menghidupkan tombol, status menampilkan sisa generate dari server.
   4. Server mati: validasi + konsumsi gagal dengan pesan yang jelas,
      tanpa exception (Generate harus ditolak, bukan jalan gratis).
 """
@@ -202,11 +202,14 @@ assert ok and "sisa 5 generate" in msg, "masukkan ulang kode harus aktif: {}".fo
 assert lic.stored_code() == REAL_CODE, "kode asli harus tersimpan"
 print("2c. migrasi OK (aktivasi lama ditolak, masukkan ulang kode aktif)")
 
-# --- 3. panel: aktivasi kode asli lewat UI, sisa tampil dari server ---
+# --- 3. panel (v0.6.1: TIDAK ada kolom API): aktivasi kode asli lewat
+# UI, sisa tampil dari server. URL mock hanya di state internal
+# (lic.get_api_base), tidak tampil di panel.
 lic.deactivate()
 panel = YukGeneratePbtPanel()
 QApplication.processEvents()
-assert panel.api_edit.text() == MOCK_URL, "kolom API harus berisi URL mock"
+assert not hasattr(panel, "api_edit"), "panel tidak boleh punya kolom API lagi"
+assert lic.get_api_base() == MOCK_URL, "state internal API harus URL mock"
 assert not panel.generate_button.isEnabled(), "Generate harus MATI sebelum aktivasi"
 panel.code_edit.setText(REAL_CODE)
 panel._on_activate()
@@ -221,7 +224,7 @@ panel._refresh_license_ui()
 assert "sisa 4 generate" in panel.license_status.text(), (
     "status panel harus 4: {}".format(panel.license_status.text())
 )
-print("3. panel OK (API tersimpan + aktivasi + status sisa 4)")
+print("3. panel OK (tanpa kolom API + aktivasi + status sisa 4)")
 
 # --- 4. server mati: gagal jelas, tanpa exception ---
 server.shutdown()

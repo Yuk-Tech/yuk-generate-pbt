@@ -15,12 +15,13 @@ bisa; ini buktinya.
 
 | File | Isi |
 |---|---|
-| `metadata.txt` | Metadata plugin (nama "Yuk Generate PBT! — By @muhfadllah", versi 0.5.9, QGIS ≥ 3.22, author @Muhfadllah) |
+| `metadata.txt` | Metadata plugin (nama "Yuk Generate PBT! — By @muhfadllah", versi 0.6.3, QGIS ≥ 3.22, author @Muhfadllah) |
 | `__init__.py` | Titik masuk — `classFactory()` |
 | `yuk_generate_pbt.py` | Kelas plugin: tombol toolbar + menu, buka/tutup sidebar (QDockWidget) |
-| `panel.py` | Panel sidebar PyQt: kode akses beta, pemilih GPKG/QPT/ECW, skala, warna, varian, form pengesahan, isi frame, format, riwayat, tombol Tutup |
+| `panel.py` | Panel sidebar PyQt: kode akses beta, pemilih GPKG/QPT/ECW, skala, warna, varian, form pengesahan, isi frame, format, riwayat, tombol Hitung lembar / Preview / Generate / Tutup |
+| `preview_dialog.py` | Dialog Preview (v0.6.2): tabel lembar + gambar preview per lembar, tombol "Generate (pakai 1 kuota)" / "Tutup" — Preview tidak memakai kuota |
 | `license.py` | Gerbang kode akses beta: hash SHA-256 kode, masa berlaku sampai 31 Des 2026, status aktif di QSettings |
-| `engine.py` | Mesin PyQGIS: grouping hibrida + styling + render + ZIP (tanpa dependensi Qt) |
+| `engine.py` | Mesin PyQGIS: grouping wilayah-dulu (v0.6.3) + styling + render + ZIP (tanpa dependensi Qt); `render_preview()` untuk Preview tanpa kuota; pembagi (jalan/irigasi) dipangkas di Python ke layer memori per lembar |
 | `test_headless.py` | Uji render headless di sandbox (tanpa GUI) |
 | `test_dock.py` | Uji sidebar headless di sandbox (toggle, Tutup, X, screenshot) |
 | `test_enums.py` | Uji resolusi enum label headless di sandbox (QGIS 4 vs QGIS 3) |
@@ -28,6 +29,10 @@ bisa; ini buktinya.
 | `test_subset_fallback.py` | Uji fallback subset headless di sandbox (subset 0 fitur / SQL invalid) |
 | `test_frame_qgs.py` | Uji isi frame + proyek .qgs headless di sandbox (nilai kustom, muat ulang .qgs) |
 | `test_access.py` | Uji gerbang kode akses beta headless di sandbox (validasi kode, kunci/buka panel, tersimpan di QSettings) |
+| `test_auto_mixed.py` | Uji grouping Auto wilayah-dulu v0.6.3 headless di sandbox (komposisi + penilaian label + regresi eksplisit) |
+| `test_auto_scored.py` | Uji Auto v0.6.3 vs v0.6.0 headless di sandbox (metrik lama + penilaian label baru) |
+| `test_preview.py` | Uji Preview tanpa kuota headless di sandbox (mock + server asli, dialog 9 baris, consume tepat 1x) |
+| `test_frame_names.py` | Uji nama frame kanan headless di sandbox (surveyor/leader/usage + 2 PT tidak tertukar, WARDOY + Demo) |
 | `icon.png` | Ikon toolbar (robot) |
 | `yuk-logo.png` | Logo di panel |
 
@@ -52,12 +57,18 @@ bisa; ini buktinya.
 
 ### Cara pakai
 
-1. Masukkan **kode akses beta** di bagian "Kode Akses Beta" lalu Aktifkan — tombol Hitung lembar dan Generate terkunci sampai kode valid dimasukkan.
+1. Masukkan **kode akses** di bagian "Kode Akses" lalu Aktifkan — tombol Hitung lembar, Preview, dan Generate terkunci sampai kode valid dimasukkan. Butuh kode? Klik "Hubungi kami" di bawah kolom kode akses (Instagram @yuktech).
 2. Pilih **GeoPackage** (`PBT_2091.gpkg`) → layer terisi otomatis.
 3. Pilih **Template QPT** (`PBTF_WARDOY.qpt`).
 3. (Opsional) Pilih **Citra ECW** → centang "Dengan citra ECW".
 4. Atur skala (default Auto), warna persil (default Hijau), warna teks
    (default Abu gelap), isi Tanggal / No PBT / No Blok, logo & TTD bila ada.
+   **Auto (v0.6.3) itu wilayah-dulu:** persil dipotong secara spasial
+   (di celah terlebar antar persil) menjadi wilayah kompak, lalu tiap
+   wilayah diberi skala terkecil yang memuat wilayahnya dan lolos
+   penilaian label — persil kecil masuk lembar zoom-in (1:250/1:500)
+   supaya labelnya muat. Skala eksplisit (mis. 1:1000) tetap satu skala
+   untuk semua lembar seperti sebelumnya.
 5. Pilih folder output + format (PDF / PDF+ZIP).
 6. **Hitung lembar** dulu untuk melihat komposisi lembar, lalu **Generate**.
 7. PDF per lembar: `PBTF_2091_L01_1-500_TANPA_CITRA.pdf` dst.
@@ -108,14 +119,23 @@ Contoh file GPKG yang sudah sesuai struktur ini:
 
 ### Yang di-port 1:1 dari aplikasi desktop (v17.15)
 
-- Grouping hibrida v17.7: blok oleh pembagi (sel 2 m, buffer 2 m,
-  4-connectivity) + grid + greedy + min-10 opsi A (v17.8). Maks 24/lembar.
+- Grouping skala eksplisit mengikuti aplikasi desktop v17.8 (grid +
+  greedy + min-10 opsi A, maks 24/lembar). **Mode Auto di plugin
+  berbeda dari desktop sejak v0.6.3:** wilayah dulu, skala kemudian —
+  potong spasial di celah terlebar, lalu skala terkecil yang memuat
+  wilayah dan lolos penilaian label (median rasio label <= 0,60 dan
+  >= 80% label muat); tanpa batas bawah fill.
 - Renderer aturan KET: jalan/gang merah #FF3F00, air biru #003FFF,
-  persil warna pilihan; trim jalan/air buffer 5 m (GeometryGenerator).
+  persil warna pilihan; trim jalan/air buffer 5 m. Di jalur PDF trim
+  lewat GeometryGenerator; di jalur Preview/.qgs pembagi dipangkas
+  dulu di Python ke layer memori per lembar (perbaikan v0.6.3 —
+  `aggregate(@layer_id, ...)` tidak bisa menemukan layer lembar di
+  proyek .qgs terpisah).
 - Labeling 3 baris (NAMA / NIB / L=…m2), satu warna teks, placement
   OverPoint (v17.13), font adaptif tanpa wrap (v17.11), obstacleType=1 (v17.9).
 - Subset per lembar: 1 persil hanya di 1 lembar; pembagi yang menyentuh
-  extent ikut sebagai konteks.
+  persil lembar atau memotong frame ikut sebagai konteks, dipangkas ke
+  buffer 5 m dari persil lembar.
 - Variabel layout: tgl/tglF/pbt/b/lembar; gambar LOGO / TTD PANCA / TTD RUDY;
   label skala ditulis literal (seperti v17).
 - Riwayat sederhana (maks 20, QSettings), "klik 2x = pakai folder ini".
@@ -154,6 +174,108 @@ Contoh file GPKG yang sudah sesuai struktur ini:
 
 ### Changelog
 
+- **v0.6.3 (2026-11-26):** perbaikan pembagian lembar mode Auto. Sebelumnya
+  persil dipilah ke tier skala *per persil* sebelum dikelompokkan, sehingga
+  persil besar dan kecil yang bertetangga di satu blok jatuh ke lembar
+  berbeda, frame antar-lembar saling menimpa, dan tiap PDF memuat persil
+  yang "bolong-bolong". Sekarang urutannya dibalik: **wilayah dulu, skala
+  kemudian** — persil dipotong secara spasial (di celah terlebar antar
+  persil) menjadi wilayah kompak, lalu tiap lembar diberi skala terkecil
+  yang memuat wilayahnya dan lolos penilaian label. Skala tetap campuran
+  antar-lembar, tetapi tidak pernah dicampur di dalam satu wilayah. Skala
+  manual (1:250 … 1:2500) tidak berubah.
+  Pengaman bidang loncat: bidang yang menyendiri di lembarnya (jarak ke
+  bidang terdekat > 8% lebar frame di tanah) dipindahkan ke lembar tetangga
+  yang masih menampungnya, dan penggabungan lembar kecil tidak boleh
+  melompati celah > 12% lebar frame.
+  **Perbaikan jalan/irigasi di Preview (juga v0.6.3):** jalan dan irigasi
+  (KET JALAN/IRIGASI) sempat tidak muncul di Preview — akar masalahnya
+  bukan grouping, melainkan ekspresi trim `aggregate(@layer_id, ...)`
+  yang tidak bisa menemukan layer lembar, karena Preview membangun
+  proyek .qgs terpisah dari `QgsProject.instance()`. Sekarang pembagi
+  dipangkas di Python (buffer 5 m dari persil lembar) dan digambar dari
+  layer memori per lembar; jalan/irigasi kini terlihat di Preview maupun
+  PDF. Uji PBT_2091: sebelum perbaikan 0 piksel jalan/air di area peta
+  pada semua 9 preview; sesudah perbaikan jalan oranye + irigasi biru
+  terlihat di semua lembar yang bersangkutan (mis. L07: jalan di tepi
+  barat + segmen irigasi kecil; total 9 lembar: 15.331 piksel oranye,
+  6.449 piksel biru).
+  **Perbaikan nama frame yang tertukar (juga v0.6.3):** nama Petugas
+  Ukur dan nama Penggunaan di frame kanan sempat tertukar (dan dua nama
+  PT juga tertukar) — akar masalahnya fungsi `_y()` di
+  `_apply_frame_texts` memakai `item.rect().top()` yang SELALU 0,0
+  (`rect()` adalah koordinat lokal item, bukan posisi di layout),
+  sehingga pengurutan label kembar tidak jalan dan penugasan mengikuti
+  urutan `layout.items()` yang sembarang. Sekarang `_y()` memakai
+  `scenePos().y()` (fallback `pos().y()`); teruji di kedua template
+  (WARDOY + Demo) dengan nama berbeda — surveyor di blok "Untuk
+  Pembuatannya", penggunaan di blok "Untuk Penggunaannya" (uji baru
+  `test_frame_names.py`).
+- **v0.6.2 (2026-11-26):** **Preview tanpa kuota** atas permintaan Derana
+  ("rugi kalau kuota sudah terpakai tapi hasilnya tidak sesuai
+  ekspektasi"). Tombol **Preview** baru di panel (di samping Hitung
+  lembar / Generate): menjalankan grouping + membangun proyek .qgs +
+  mengekspor satu PNG resolusi rendah per lembar, lalu menampilkan
+  dialog preview berisi tabel lembar (nomor, skala, jumlah bidang,
+  fill fraction, median rasio label, peringatan) dan gambar tiap
+  lembar yang bisa digeser — semuanya **tanpa memanggil consume**
+  (jalur Preview tidak menyentuh lisensi sama sekali; kuota tidak
+  berkurang meski Preview gagal). Dialog menampilkan sisa generate
+  (dari validate terakhir) dan tombol **"Generate (pakai 1 kuota)"**
+  yang menjalankan alur Generate yang sudah ada (validate fresh +
+  consume 1 + export PDF + ZIP); tombol "Tutup" menutup tanpa pakai
+  kuota. **Juga di v0.6.2:** label "Kode Akses Beta" diganti "Kode
+  Akses" (judul grup + pesan status/log), dan di bawah kolom kode
+  akses ada link "Butuh Kode Akses? Hubungi kami" ke Instagram
+  @yuktech. Uji: PBT_2091 → Preview 7 lembar (skala v0.6.1), kuota
+  tetap 5 sebelum/sesudah Preview (mock + server asli), Generate
+  dari dialog consume tepat 1x (5 → 4 mock; 5 → 4 server asli,
+  kode YUK-6WCQXX-APQCMA); PBT_2130 → Preview 13 lembar. Skala
+  eksplisit + Auto v0.6.1 tidak berubah. Catatan: dua kode beta
+  publik pertama (YUK-4KEUCW-HP2W2S, YUK-4V7KHZ-DFM87T) sudah habis
+  (0 sisa) saat uji server asli — uji memakai kode beta publik
+  berikutnya yang masih ada sisanya.
+- **v0.6.1 (2026-11-26):** dua perubahan atas permintaan Derana.
+  **(1) Penilaian skala di mode Auto** (bukan cap tetap — Derana menolak
+  cap maks 1:1000 karena plugin harus fleksibel ke semua gambar): tiap
+  lembar Auto kini dinilai dari fill fraction (luas bbox persil / luas
+  frame peta) dan median rasio lebar label / lebar persil di kertas.
+  Lembar dengan >= 10 bidang yang terlalu kosong (fill < 0,15) atau
+  labelnya terlalu memenuhi persil (median rasio > 0,60) diturunkan
+  satu tingkat (zoom-in) dan persilnya dikelompokkan ulang — sampai
+  lolos atau mencapai 1:250. Lembar kecil (< 10 bidang) tidak dinilai
+  (urusannya merge, bukan skala). Ambang fill 0,15 dipilih dari bukti
+  dua dataset: lembar 1:500 yang benar punya fill 0,16-0,19,
+  sementara lembar 1:1500/1:2500 yang bermasalah punya fill 0,08-0,13
+  (ambang 0,20 salah menandai lembar 1:500 yang benar dan memecah
+  persilnya sampai 1:250). Uji: PBT_2091 → Auto tetap 7 lembar, tapi
+  tanpa 1:2500 (L03 1:2500/0,08 → 1:1500/0,23; L06 1:2500/0,10 →
+  1:1500/0,28; L04 1:1500/0,10 → 1:1000/0,23); PBT_2130 → Auto tetap
+  13 lembar, tanpa 1:2500 (keduanya → 1:2000), semua lembar >= 10
+  bidang lolos penilaian. Skala eksplisit tidak berubah.
+  **(2) Alamat API lisensi disembunyikan dari panel** — kolom "API
+  lisensi" dihapus sepenuhnya (label + isian + handler); pengguna
+  hanya melihat kolom kode akses, tanpa tahu alamat API-nya (sama
+  seperti YUK Entry). URL tetap hardcoded di `license.py`
+  (`DEFAULT_API_BASE_URL`, satu-satunya tempat URL itu ada di kode);
+  nilai tersimpan di QSettings dari mesin lama tetap dihormati
+  diam-diam sebagai fallback internal. Pesan status/error tidak
+  menampilkan URL.
+- **v0.6.0 (2026-11-26):** mode **Auto jadi campuran** — sebelumnya Auto
+  memilih SATU skala untuk seluruh pekerjaan, sehingga satu lembar bisa
+  berisi persil besar dan kecil dengan satu ukuran font (teks meluber /
+  bertabrakan, terutama di 1:1000). Sekarang tiap persil masuk tier
+  menurut skala terbesar yang label 3 barisnya masih muat di dalam
+  persil (dihitung dari panjang label dan bbox persil), lalu tiap tier
+  dikelompokkan pada skalanya sendiri — persil kecil dapat lembar
+  zoom-in (1:250/1:500), persil besar dapat lembar 1:1500/1:2000/1:2500.
+  Lembar kecil boleh gabung antar-tier bila bbox gabungan muat pada
+  skala yang lebih zoom-in. Ukuran font label tetap per skala seperti
+  sebelumnya (6 pt @1:250, 5 pt @1:500, 4 pt @1:1000 ke atas).
+  Skala eksplisit (1:250…1:2500) tidak berubah. Uji: dataset PBT_2091
+  (115 persil) → Auto 7 lembar (4× 1:500, 1× 1:1500, 2× 1:2500),
+  semua persil tepat satu kali, tanpa pelanggaran label-muat; 1:500
+  tetap 10 lembar [2,3,3,4,7,11,17,21,23,24] seperti sebelumnya.
 - **v0.5.9 (2026-11-21):** perbaikan kompatibilitas Qt6 untuk upload
   plugins.qgis.org — pemindai menemukan 2 masalah enum: bentuk datar
   `QgsWkbTypes.PolygonGeometry` dan `QgsUnitTypes.RenderPoints` harus
@@ -219,15 +341,16 @@ Contoh file GPKG yang sudah sesuai struktur ini:
   lawan API tiruan (`test_api_license.py`): serangan hash-only
   ditolak dan kuota utuh, migrasi aktivasi lama, konsumsi normal.
 - **v0.5.1 (2026-11-21):** URL API lisensi jadi bawaan plugin
-  (`DEFAULT_API_BASE_URL` = server Supabase produksi
-  `hjqmyjrjiktvdqgjkrvp`). Penguji beta tidak perlu lagi mengisi kolom
-  API — cukup masukkan kode akses. Kolom API di panel tetap ada sebagai
-  override (pindah server); mengosongkannya berarti mode lokal.
-  URL ini bukan rahasia (endpoint publik; kredensialnya kode akses).
+  (`DEFAULT_API_BASE_URL` = server Supabase produksi `xxxxx`). Penguji beta tidak perlu lagi mengisi kolom
+  API — cukup masukkan kode akses. Kolom API di panel saat itu tetap
+  ada sebagai override (pindah server); mengosongkannya berarti mode
+  lokal. (Kolom ini dihapus di v0.6.1 — alamat API tidak lagi
+  ditampilkan.) URL ini bukan rahasia (endpoint publik; kredensialnya
+  kode akses).
 - **v0.5.0 (2026-11-20):** kode akses beta pindah ke server Supabase.
-  Panel punya kolom **API lisensi**: isi URL dasar
+  Panel saat itu punya kolom **API lisensi**: isi URL dasar
   (`https://xxxxx.supabase.co/functions/v1`) untuk mode server, kosong =
-  mode lokal lama. Mode server: aktivasi dicek ke endpoint
+  mode lokal lama. (Kolom ini dihapus di v0.6.1.) Mode server: aktivasi dicek ke endpoint
   `validate-code`, dan setiap Generate memotong 1 generate lewat
   `consume-generate` (atomik, 5 generate per kode, s.d. 31 Des 2026);
   status panel menampilkan sisa generate dari server. Aktivasi lokal
@@ -266,9 +389,9 @@ Contoh file GPKG yang sudah sesuai struktur ini:
   hilang tanpa rotasi. Diuji headless: render L01 diperiksa per klaster
   (atas/tengah/kiri-bawah) — semua 24 label rapi di dalam persil, tanpa
   tabrakan; render penuh tetap lulus (10 lembar).
-- **v0.4.0 (2026-11-20):** gerbang kode akses beta. Panel punya bagian
-  "Kode Akses Beta": tombol Hitung lembar dan Generate terkunci sampai
-  kode beta yang valid dimasukkan. Validasi di `license.py` — yang
+- **v0.4.0 (2026-11-20):** gerbang kode akses. Panel punya bagian
+  "Kode Akses" (dulu "Kode Akses Beta", diganti di v0.6.2): tombol Hitung lembar dan Generate terkunci sampai
+  kode yang valid dimasukkan. Validasi di `license.py` — yang
   disimpan hanya hash SHA-256 kode (kode asli tidak masuk repo),
   masa beta sampai 31 Des 2026, status aktif tersimpan di QSettings
   (cukup sekali per mesin). Kode dibuat dengan `gen_beta_codes.py`
@@ -397,12 +520,12 @@ Follow us on Instagram: **[@yuktech](https://instagram.com/yuktech)** — update
 
 | File | Contents |
 |---|---|
-| `metadata.txt` | Plugin metadata (name "Yuk Generate PBT! — By @muhfadllah", version 0.5.6, QGIS ≥ 3.22, author @Muhfadllah) |
+| `metadata.txt` | Plugin metadata (name "Yuk Generate PBT! — By @muhfadllah", version 0.6.3, QGIS ≥ 3.22, author @Muhfadllah) |
 | `__init__.py` | Entry point — `classFactory()` |
 | `yuk_generate_pbt.py` | Plugin class: toolbar button + menu, open/close sidebar (QDockWidget) |
 | `panel.py` | PyQt sidebar panel: beta access code, GPKG/QPT/ECW pickers, scale, colors, variant, approval form, frame fields, format, history, Close button |
 | `license.py` | Beta access-code gate: SHA-256 code hash, valid until 31 Dec 2026, active status stored in QSettings |
-| `engine.py` | PyQGIS engine: hybrid grouping + styling + render + ZIP (no Qt dependency) |
+| `engine.py` | PyQGIS engine: region-first grouping (v0.6.3) + styling + render + ZIP (no Qt dependency); dividers (roads/irrigation) pre-trimmed in Python into a per-sheet memory layer |
 | `test_headless.py` | Headless render test in the sandbox (no GUI) |
 | `test_dock.py` | Headless sidebar test in the sandbox (toggle, Close, X, screenshot) |
 | `test_enums.py` | Headless label-enum resolution test in the sandbox (QGIS 4 vs QGIS 3) |
@@ -410,6 +533,10 @@ Follow us on Instagram: **[@yuktech](https://instagram.com/yuktech)** — update
 | `test_subset_fallback.py` | Headless subset-fallback test in the sandbox (0-feature subset / invalid SQL) |
 | `test_frame_qgs.py` | Headless frame-fields + .qgs project test in the sandbox (custom values, .qgs reload) |
 | `test_access.py` | Headless beta access-code gate test in the sandbox (code validation, panel lock/unlock, QSettings persistence) |
+| `test_auto_mixed.py` | Headless v0.6.3 region-first Auto grouping test in the sandbox (composition + label scoring + explicit-scale regression) |
+| `test_auto_scored.py` | Headless Auto v0.6.3 vs v0.6.0 test in the sandbox (old metrics + new label scoring) |
+| `test_preview.py` | Headless quota-free Preview test in the sandbox (mock + real server, 9-row dialog, exactly 1 consume) |
+| `test_frame_names.py` | Headless right-frame names test in the sandbox (surveyor/leader/usage + 2 company names never swapped, WARDOY + Demo) |
 | `icon.png` | Toolbar icon (robot) |
 | `yuk-logo.png` | Panel logo |
 
@@ -427,6 +554,12 @@ Follow us on Instagram: **[@yuktech](https://instagram.com/yuktech)** — update
 3. Pick a **QPT template** (`PBTF_WARDOY.qpt`).
 4. (Optional) Pick an **ECW image** → check "With ECW imagery".
 5. Set the scale (default Auto), parcel color (default Green), text color (default Dark gray), fill in Date / PBT No / Block No, logo & signatures if any.
+   **Auto (v0.6.3) is region-first:** parcels are cut spatially (at the
+   widest gap between parcels) into compact regions, then each region gets
+   the smallest scale that contains it and passes the label check — small
+   parcels go to zoomed-in sheets (1:250/1:500) so their labels fit. An
+   explicit scale (e.g. 1:1000) still uses one scale for all sheets, as
+   before.
 6. Pick the output folder + format (PDF / PDF+ZIP).
 7. **Count sheets** first to see the sheet composition, then **Generate**.
 8. One PDF per sheet: `PBTF_2091_L01_1-500_TANPA_CITRA.pdf`, etc. The ZIP (`PBTF_2091.zip`) contains only PDFs — no debug/log files.
@@ -475,10 +608,15 @@ A sample GPKG file following this structure:
 
 ### Ported 1:1 from the desktop app (v17.15)
 
-- Hybrid grouping v17.7: divider blocks (2 m cell, 2 m buffer, 4-connectivity) + grid + greedy + min-10 option A (v17.8). Max 24/sheet.
-- KET rule renderer: roads/lanes red #FF3F00, water blue #003FFF, parcels in the chosen color; road/water trim with a 5 m buffer (GeometryGenerator).
+- Explicit-scale grouping follows the desktop app v17.8 (grid + greedy +
+  min-10 option A, max 24/sheet). **Auto mode in the plugin differs from
+  the desktop since v0.6.3:** region first, scale second — spatial split
+  at the widest gap, then the smallest scale that contains the region and
+  passes the label check (median label ratio <= 0.60 and >= 80% of labels
+  fit); no lower fill bound.
+- KET rule renderer: roads/lanes red #FF3F00, water blue #003FFF, parcels in the chosen color; road/water trim with a 5 m buffer. On the PDF path the trim runs through GeometryGenerator; on the Preview/.qgs path dividers are pre-trimmed in Python into a per-sheet memory layer (v0.6.3 fix — `aggregate(@layer_id, ...)` cannot find the sheet layer in a separate .qgs project).
 - 3-line labeling (NAMA / NIB / L=…m2), single text color, OverPoint placement (v17.13), adaptive font without wrap (v17.11), obstacleType=1 (v17.9).
-- Per-sheet subset: 1 parcel on exactly 1 sheet; dividers touching the extent are included as context.
+- Per-sheet subset: 1 parcel on exactly 1 sheet; dividers touching a sheet's parcels or crossing its frame are included as context, trimmed to a 5 m buffer around the sheet's parcels.
 - Layout variables: tgl/tglF/pbt/b/lembar; LOGO / TTD PANCA / TTD RUDY pictures; scale label written literally (as in v17).
 - Simple history (max 20, QSettings), "double-click = use this folder".
 
@@ -498,6 +636,107 @@ A sample GPKG file following this structure:
 
 ### Recent changes
 
+- **v0.6.3 (2026-11-26):** fix to Auto-mode sheet splitting. Parcels used to be
+  sorted into per-parcel scale tiers before grouping, so neighbouring big and
+  small parcels of the same block landed on different sheets, sheet frames
+  overlapped heavily, and each PDF showed scattered, "holey" parcels. The
+  order is now reversed: **region first, scale second** — parcels are cut
+  spatially (at the widest gap) into compact regions, then each sheet gets
+  the smallest official scale that contains its region and passes the label
+  check. Scales still vary between sheets, never within one region. Explicit
+  scales (1:250 … 1:2500) are unchanged.
+  "Jumping parcel" guard: a parcel isolated on its sheet (distance to the
+  nearest parcel > 8% of the ground frame width) is moved to a neighbouring
+  sheet that can hold it, and small-sheet merging may not jump a gap > 12%
+  of the frame width.
+  **Road/irrigation fix in Preview (also v0.6.3):** roads and irrigation
+  (KET JALAN/IRIGASI) used to be missing from Preview — the root cause was
+  not the grouping but the trim expression `aggregate(@layer_id, ...)`,
+  which cannot find the sheet layer because Preview builds a .qgs project
+  separate from `QgsProject.instance()`. Dividers are now pre-trimmed in
+  Python (5 m buffer around the sheet's parcels) and drawn from a
+  per-sheet memory layer; roads/irrigation now show in Preview and in
+  PDFs. PBT_2091 test: before the fix, 0 road/water pixels in the map
+  area of all 9 previews; after the fix, orange roads + blue irrigation
+  appear on every sheet they belong to (e.g. L07: road along the west
+  edge + a small irrigation segment; 9 sheets total: 15,331 orange
+  pixels, 6,449 blue pixels).
+  **Swapped frame names fix (also v0.6.3):** the Surveyor name and the
+  Usage name in the right frame used to be swapped (and so were the two
+  company names) — the root cause was the `_y()` helper in
+  `_apply_frame_texts` using `item.rect().top()`, which is ALWAYS 0.0
+  (`rect()` is the item's local coordinates, not its layout position),
+  so sorting the duplicate labels did nothing and assignment followed
+  the arbitrary `layout.items()` order. `_y()` now uses
+  `scenePos().y()` (fallback `pos().y()`); verified on both templates
+  (WARDOY + Demo) with distinct names — surveyor in the "Untuk
+  Pembuatannya" block, usage in the "Untuk Penggunaannya" block (new
+  test `test_frame_names.py`).
+- **v0.6.2 (2026-11-26):** **Quota-free Preview** at Derana's request
+  ("a waste if quota is already spent but the result doesn't match
+  expectations"). A new **Preview** button on the panel (next to Count
+  sheets / Generate): runs grouping + builds the .qgs project +
+  exports one low-resolution PNG per sheet, then shows a preview
+  dialog with a sheet table (number, scale, parcel count, fill
+  fraction, median label ratio, warnings) and a per-sheet image
+  viewer — all **without calling consume** (the Preview path never
+  touches licensing; quota doesn't decrease even if Preview fails).
+  The dialog shows the remaining generates (from the last validate)
+  and a **"Generate (use 1 quota)"** button that runs the existing
+  Generate flow (fresh validate + consume 1 + export PDF + ZIP);
+  "Close" exits without using quota. **Also in v0.6.2:** the
+  "Kode Akses Beta" label is renamed "Kode Akses" (group title +
+  status/log messages), and a "Butuh Kode Akses? Hubungi kami" link
+  to Instagram @yuktech sits below the access-code field. Tests:
+  PBT_2091 → Preview shows 7 sheets (v0.6.1 scales), quota stays 5
+  before/after Preview (mock and real server), Generate from the
+  dialog consumes exactly 1x (5 → 4 mock; 5 → 4 real server, code
+  YUK-6WCQXX-APQCMA); PBT_2130 → Preview 13 sheets. Explicit scales
+  + Auto v0.6.1 unchanged. Note: the first two public beta codes
+  (YUK-4KEUCW-HP2W2S, YUK-4V7KHZ-DFM87T) are already exhausted
+  (0 remaining) at the time of the real-server test — the test used
+  the next public
+  beta code that still had quota.
+- **v0.6.1 (2026-11-26):** two changes at Derana's request.
+  **(1) Per-sheet scale scoring in Auto mode** (not a fixed cap — Derana
+  rejected a max-1:1000 cap because the plugin must stay flexible for
+  any dataset): each Auto sheet is now scored on fill fraction (parcel
+  bbox area / map frame area) and the median label-width / parcel-width
+  ratio on paper. Sheets with >= 10 parcels that are too empty
+  (fill < 0.15) or whose labels nearly fill their parcels (median ratio
+  > 0.60) step down one scale level (zoom in) and regroup — until they
+  pass or reach 1:250. Small sheets (< 10 parcels) are not scored
+  (merging handles them, not scale). The 0.15 fill threshold comes from
+  evidence on both datasets: correct 1:500 sheets have fill 0.16–0.19,
+  while the problematic 1:1500/1:2500 sheets have fill 0.08–0.13 (a
+  0.20 threshold wrongly flagged correct 1:500 sheets and fragmented
+  them down to 1:250). Tests: PBT_2091 → Auto still 7 sheets, but no
+  1:2500 (L03 1:2500/0.08 → 1:1500/0.23; L06 1:2500/0.10 → 1:1500/0.28;
+  L04 1:1500/0.10 → 1:1000/0.23); PBT_2130 → Auto still 13 sheets, no
+  1:2500 (both → 1:2000), every sheet with >= 10 parcels passes
+  scoring. Explicit scales unchanged.
+  **(2) License API address hidden from the panel** — the "API lisensi"
+  field is removed entirely (label + input + handler); users only see
+  the access-code field, without knowing the API address (same as YUK
+  Entry). The URL stays hardcoded in `license.py`
+  (`DEFAULT_API_BASE_URL`, the only place it exists in code); a stored
+  QSettings value from older machines is still respected silently as an
+  internal fallback. Status/error messages never show the URL.
+- **v0.6.0 (2026-11-26):** Auto mode became mixed-scale — previously
+  Auto picked ONE scale for the whole job, so one sheet could hold big
+  and small parcels with a single font size (text overflowing or
+  colliding, especially at 1:1000). Now each parcel is tiered by the
+  largest scale its 3-line label still fits inside the parcel
+  (computed from label length and parcel bbox), then each tier is
+  grouped at its own scale — small parcels get zoomed-in sheets
+  (1:250/1:500), big parcels get 1:1500/1:2000/1:2500 sheets. Small
+  sheets may merge across tiers when their combined bbox fits at the
+  more zoomed-in scale. Label font size stays per scale as before
+  (6 pt @1:250, 5 pt @1:500, 4 pt @1:1000 and above). Explicit scales
+  (1:250…1:2500) unchanged. Tests: PBT_2091 (115 parcels) → Auto
+  7 sheets (4× 1:500, 1× 1:1500, 2× 1:2500), every parcel exactly
+  once, no label-fit violations; 1:500 still 10 sheets
+  [2,3,3,4,7,11,17,21,23,24] as before.
 - **v0.5.9 (2026-11-21):** Qt6 compatibility fix for the plugins.qgis.org upload — the scanner flagged 2 enum issues: the flat forms `QgsWkbTypes.PolygonGeometry` and `QgsUnitTypes.RenderPoints` must be written scoped (`GeometryType.PolygonGeometry`, `RenderUnit.RenderPoints`). Both were verified in the QGIS 3.22 sandbox to hold the same values (2 and 4) as the flat forms, so the plugin still runs on QGIS 3 and 4. Note: on QGIS 4.2.2 the flat forms actually still work at runtime (the v0.5.1 live test passed) — this is purely a requirement of the site's static scanner. Everything else identical to v0.5.8.
 - **v0.5.8 (2026-11-21):** security-scan fix for the plugins.qgis.org upload — v0.5.7 was blocked by the site scanner (2 critical findings: 23 Bandit + 10 Secrets Detection). All 33 findings were false positives / deliberate patterns and are now marked in the code: the 10 SHA-256 beta-code hashes in `license.py` carry `# pragma: allowlist secret` (hashes of codes already published in the description — not secrets); the `urlopen` call to the Supabase API carries `# nosec B310` (HTTPS-only to a fixed endpoint, certificates verified by urllib's default); the 22 `try/except: pass/continue` blocks (best-effort, non-fatal failures) carry `# nosec B110/B112`. Verified locally: Bandit 0 findings, detect-secrets 0 findings. Plugin content identical to v0.5.7.
 - **v0.5.7 (2026-11-21):** metadata fix for the plugins.qgis.org upload — the site validator rejected the v0.5.6 zip because the `tracker` field was missing (the QGIS docs call it optional, but the site validator requires it). Added `tracker` (the repo's GitHub Issues page) and `homepage` (the repo page, as there is no separate website yet) — all three links (homepage, tracker, repository) are now valid and public, as the upload checklist requires. Plugin content identical to v0.5.6.

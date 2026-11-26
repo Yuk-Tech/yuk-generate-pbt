@@ -39,11 +39,13 @@ def _enum_value(cls, scoped_name, member, fallback):
 # Bentuk flat tidak ada di PyQt6 — dialog crash di sana (AttributeError,
 # dilaporkan 2026-11-20 19:56 WIB).
 ALIGN_CENTER = _enum_value(Qt, "AlignmentFlag", "AlignCenter", 0x0004)
+TEXT_FORMAT_RICH = _enum_value(Qt, "TextFormat", "RichText", 1)
 from qgis.PyQt.QtGui import QPixmap
 from qgis.PyQt.QtWidgets import (
     QButtonGroup,
     QCheckBox,
     QComboBox,
+    QDialog,
     QFileDialog,
     QFormLayout,
     QGroupBox,
@@ -124,10 +126,13 @@ class YukGeneratePbtPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.settings = QSettings("YukGeneratePBT", "YukGeneratePBT")
-        # API lisensi (v0.5.0, bawaan v0.5.1): bila belum pernah diatur,
-        # pakai server bawaan (DEFAULT_API_BASE_URL) dan simpan sebagai
-        # nilai awal — penguji tidak perlu mengisi apa pun. Nilai ""
-        # yang tersimpan sengaja berarti mode lokal.
+        # API lisensi (v0.6.1): alamat API TIDAK ditampilkan di panel
+        # (keputusan Derana 2026-11-26 — sama seperti YUK Entry:
+        # pengguna hanya melihat kolom kode akses, tanpa tahu alamat
+        # API-nya). URL bawaan hardcoded di license.DEFAULT_API_BASE_URL
+        # (satu-satunya tempat URL itu ada di kode). Nilai tersimpan di
+        # QSettings (license/api_base) dari mesin lama tetap dihormati
+        # diam-diam sebagai fallback internal; nilai "" berarti mode lokal.
         _stored_api = self.settings.value(lic.LICENSE_KEY_API, None)
         if _stored_api is None:
             _stored_api = lic.DEFAULT_API_BASE_URL
@@ -161,13 +166,14 @@ class YukGeneratePbtPanel(QWidget):
         header.addWidget(title)
         root.addLayout(header)
 
-        # Gerbang kode akses beta (v0.4.0, API server v0.5.0): Hitung
-        # lembar / Generate terkunci sampai kode beta yang valid
+        # Gerbang kode akses (v0.4.0, API server v0.5.0): Hitung
+        # lembar / Generate terkunci sampai kode yang valid
         # dimasukkan. Status aktif disimpan di QSettings, jadi cukup
-        # sekali per mesin. Kolom API lisensi: isi URL dasar Supabase
-        # (.../functions/v1) untuk mode server (kuota 5 generate/kode
-        # dihitung di server); kosong = mode lokal (tanpa hitungan).
-        access_box = QGroupBox("Kode Akses Beta")
+        # sekali per mesin. Alamat API lisensi TIDAK ditampilkan di
+        # panel (v0.6.1) — hardcoded di license.py; kuota 5 generate/
+        # kode dihitung di server.
+        access_box = QGroupBox("Kode Akses")
+        self.access_box = access_box
         access = QVBoxLayout(access_box)
         access_row = QHBoxLayout()
         self.code_edit = QLineEdit()
@@ -180,17 +186,14 @@ class YukGeneratePbtPanel(QWidget):
         self.license_status = QLabel(lic.status_text())
         self.license_status.setWordWrap(True)
         access.addWidget(self.license_status)
-        api_row = QHBoxLayout()
-        api_label = QLabel("API lisensi:")
-        self.api_edit = QLineEdit()
-        self.api_edit.setPlaceholderText(
-            "https://xxxxx.supabase.co/functions/v1 (kosong = lokal)"
+        # Link kontak (v0.6.2): di bawah status kode akses.
+        self.contact_label = QLabel(
+            'Butuh Kode Akses? <a href="https://www.instagram.com/yuktech">Hubungi kami</a>'
         )
-        self.api_edit.setText(lic.get_api_base())
-        self.api_edit.editingFinished.connect(self._on_api_changed)
-        api_row.addWidget(api_label)
-        api_row.addWidget(self.api_edit)
-        access.addLayout(api_row)
+        self.contact_label.setTextFormat(TEXT_FORMAT_RICH)
+        self.contact_label.setWordWrap(True)
+        self.contact_label.setOpenExternalLinks(True)
+        access.addWidget(self.contact_label)
         root.addWidget(access_box)
 
         form = QFormLayout()
@@ -347,12 +350,15 @@ class YukGeneratePbtPanel(QWidget):
         buttons = QHBoxLayout()
         self.count_button = QPushButton("Hitung lembar")
         self.count_button.clicked.connect(self._on_count)
+        self.preview_button = QPushButton("Preview")
+        self.preview_button.clicked.connect(self._on_preview)
         self.generate_button = QPushButton("Generate")
         self.generate_button.clicked.connect(self._on_generate)
         close_button = QPushButton("Tutup")
         # Tutup di panel sidebar = sembunyikan dock (bukan close widget).
         close_button.clicked.connect(self.close_requested.emit)
         buttons.addWidget(self.count_button)
+        buttons.addWidget(self.preview_button)
         buttons.addWidget(self.generate_button)
         buttons.addStretch(1)
         buttons.addWidget(close_button)
@@ -486,25 +492,13 @@ class YukGeneratePbtPanel(QWidget):
         self.code_edit.setEnabled(not active)
         self.activate_button.setEnabled(not active)
         self.count_button.setEnabled(active)
+        self.preview_button.setEnabled(active)
         self.generate_button.setEnabled(active)
-
-    def _on_api_changed(self):
-        """Simpan URL API lisensi; ganti mode validasi. Bila API baru
-        diisi dan ada aktivasi lokal, konfirmasi sekali ke server."""
-        url = self.api_edit.text().strip()
-        lic.set_api_base(url)
-        self.settings.setValue(lic.LICENSE_KEY_API, url)
-        if url:
-            lic.ensure_server_activation()
-            self._log("API lisensi: mode server.")
-        else:
-            self._log("API lisensi: mode lokal.")
-        self._refresh_license_ui()
 
     def _on_activate(self):
         code = self.code_edit.text().strip()
         if not code:
-            self._log("Gagal: masukkan kode akses beta.")
+            self._log("Gagal: masukkan kode akses.")
             return
         ok, msg = lic.activate(code)
         self._log(("Aktif: " if ok else "Gagal: ") + msg)
@@ -512,7 +506,7 @@ class YukGeneratePbtPanel(QWidget):
 
     def _on_count(self):
         if not lic.is_activated():
-            self._log("Gagal: masukkan kode akses beta dulu.")
+            self._log("Gagal: masukkan kode akses dulu.")
             return
         try:
             opts = self._validate_common()
@@ -557,8 +551,15 @@ class YukGeneratePbtPanel(QWidget):
 
     def _on_generate(self):
         if not lic.is_activated():
-            self._log("Gagal: masukkan kode akses beta dulu.")
+            self._log("Gagal: masukkan kode akses dulu.")
             return
+        self._run_generate()
+
+    def _run_generate(self):
+        """Generate sesungguhnya — dipakai tombol Generate di panel DAN
+        tombol Generate di dialog Preview (v0.6.2). Perilaku kuota
+        IDENTIK dari kedua tempat: validate fresh + consume 1 generate
+        SEBELUM render."""
         # v0.5.0: 1 Generate = 1 generate kuota. Potong DULU di server
         # (mode server) supaya generate yang gagal di tengah jalan tetap
         # terhitung — kuota tidak bisa diakali dengan membatalkan.
@@ -593,6 +594,50 @@ class YukGeneratePbtPanel(QWidget):
         finally:
             self.generate_button.setEnabled(lic.is_activated())
             self._refresh_license_ui()
+
+    def _on_preview(self):
+        """Preview TANPA KUOTA (v0.6.2): grouping + bangun layout +
+        export PNG resolusi rendah, tampilkan dialog preview. Jalur
+        ini TIDAK memanggil consume_generate (engine.render_preview
+        tidak menyentuh lisensi sama sekali) — kuota hanya dipakai
+        bila pengguna menekan "Generate (pakai 1 kuota)" di dialog,
+        yang menjalankan _run_generate() yang sama dengan tombol
+        Generate di panel."""
+        if not lic.is_activated():
+            self._log("Gagal: masukkan kode akses dulu.")
+            return
+        from .preview_dialog import PreviewDialog
+
+        temp_dir = None
+        accepted = False
+        try:
+            opts = self._validate_common()
+            self.preview_button.setEnabled(False)
+            self._log("Preview: membangun lembar (tanpa kuota)…")
+            result = engine.render_preview(opts)
+            temp_dir = result["temp_dir"]
+            self._log(
+                "Preview: {} lembar ({}). Kuota tidak dipakai.".format(
+                    len(result["groups"]),
+                    ", ".join(
+                        "{} {}".format(m["id"], m["scale"])
+                        for m in result["metrics"]
+                    ),
+                )
+            )
+            dialog = PreviewDialog(result, lic.remaining_generates(), self)
+            accepted = dialog.exec() == QDialog.Accepted
+        except Exception as exc:
+            self._log("Gagal: {}".format(exc))
+        finally:
+            if temp_dir:
+                import shutil
+
+                shutil.rmtree(temp_dir, ignore_errors=True)
+            self.preview_button.setEnabled(lic.is_activated())
+            self._refresh_license_ui()
+        if accepted:
+            self._run_generate()
 
     # ------------------------------------------------------------------
     def _load_history(self):

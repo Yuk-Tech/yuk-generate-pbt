@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Uji gerbang kode akses beta v0.5.9 — headless di sandbox E2B.
+"""Uji gerbang kode akses v0.5.9 — headless di sandbox E2B.
 
 Memeriksa (tanpa GUI):
   1. license.validate_code: kode salah ditolak, kode valid diterima,

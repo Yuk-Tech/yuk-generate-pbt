@@ -26,7 +26,21 @@ Yang DITAMBAH di plugin (tidak ada di desktop v17.15):
   bisa dibuka dan diedit di QGIS sebelum diekspor ke PDF;
 - isi frame 9 butir (sistem koordinat, desa/kelurahan, kabupaten/kota,
   kecamatan, provinsi, petugas ukur, pimpinan, penggunaan, pelaksana)
-  ditulis ke label layout (v0.3.0).
+  ditulis ke label layout (v0.3.0);
+- mode Auto CAMPURAN (v0.6.0): tiap persil masuk tier menurut skala
+  terbesar yang label 3 barisnya masih muat (label_fits /
+  parcel_max_denominator); tiap tier dikelompokkan pada skalanya
+  sendiri; merge_small_accs scale-aware (gabung antar-tier hanya bila
+  bbox gabungan muat pada skala min). Skala eksplisit tetap satu skala.
+- penilaian skala per lembar (v0.6.1): tiap lembar Auto dinilai dari
+  fill fraction (luas bbox persil / luas frame peta) dan median rasio
+  lebar label / lebar persil di kertas; lembar dengan >= 10 bidang
+  yang terlalu kosong (fill < 0,15) atau labelnya terlalu memenuhi
+  persil (median rasio > 0,60) diturunkan satu tingkat (zoom-in) dan
+  persilnya dikelompokkan ulang — sampai lolos atau mencapai 1:250.
+  Lembar kecil (< 10 bidang) tidak dinilai (urusannya merge, bukan
+  skala). Bukan cap tetap: dataset persil besar yang memang padat di
+  1:2500 boleh tetap 1:2500.
 """
 
 import math
@@ -140,6 +154,500 @@ def label_font_size_pt(denominator):
     return 4
 
 
+# ---------------------------------------------------------------------------
+# Kecocokan label (mode Auto campuran, v0.6.0)
+# ---------------------------------------------------------------------------
+# Label 3 baris (NAMA / NIB / L=...m2) dirender dengan font
+# label_font_size_pt(denominator). Lebar satu karakter rata-rata
+# diperkirakan 0,55 × ukuran font (Arial proporsional) dan tinggi baris
+# 1,2 × ukuran font; 1 pt = 0,3528 mm. Label dianggap muat bila lebar dan
+# tingginya ≤ 85% lebar/tinggi bbox persil di kertas — 15% sisanya untuk
+# bentuk persil yang tidak persegi dan padding label QGIS.
+
+PT_TO_MM = 0.3528
+LABEL_FIT_RATIO = 0.85
+LABEL_CHAR_WIDTH_FACTOR = 0.55
+LABEL_LINE_HEIGHT_FACTOR = 1.2
+
+
+def label_fits(parcel, denominator):
+    """True bila label 3 baris persil muat di dalam bbox persil di kertas
+    pada skala `denominator`."""
+    font_pt = label_font_size_pt(denominator)
+    label_w_mm = parcel.label_len * LABEL_CHAR_WIDTH_FACTOR * font_pt * PT_TO_MM
+    label_h_mm = 3 * font_pt * LABEL_LINE_HEIGHT_FACTOR * PT_TO_MM
+    paper_w_mm = (parcel.bbox[2] - parcel.bbox[0]) / denominator * 1000.0
+    paper_h_mm = (parcel.bbox[3] - parcel.bbox[1]) / denominator * 1000.0
+    return (
+        label_w_mm <= LABEL_FIT_RATIO * paper_w_mm
+        and label_h_mm <= LABEL_FIT_RATIO * paper_h_mm
+    )
+
+
+def parcel_max_denominator(parcel):
+    """Skala TERBESAR (penyebut terbesar = paling kecil di kertas) yang
+    label persil ini masih muat, dari OFFICIAL_SCALES. Mengembalikan
+    (denominator, warning) — warning berisi pesan bila label tidak muat
+    bahkan pada 1:250 (tetap dikembalikan 250 supaya render jalan).
+    label_len 0 (tidak diketahui) dianggap muat di semua skala."""
+    if parcel.label_len <= 0:
+        return (OFFICIAL_SCALES[-1], None)
+    for d in reversed(OFFICIAL_SCALES):
+        if label_fits(parcel, d):
+            return (d, None)
+    return (
+        OFFICIAL_SCALES[0],
+        "Label bidang {} tidak muat bahkan pada skala 1:{}; "
+        "label mungkin meluber.".format(parcel.id, int(OFFICIAL_SCALES[0])),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Penilaian skala lembar (mode Auto, v0.6.1)
+# ---------------------------------------------------------------------------
+# Aturan v0.6.0 ("skala TERBESAR yang labelnya muat") terlalu agresif:
+# setengah persil PBT_2091 (58/115) dilempar ke 1:2500, lembarnya ~90%
+# kosong (fill 8-10%) dan label 4pt berdesakan (rasio median 0,64) —
+# secara aturan "muat", secara praktik PBT tidak cocok (lihat
+# DIAG-2091-2026-11-26.md). Derana menolak cap tetap (mis. maks 1:1000)
+# karena plugin harus fleksibel ke semua gambar: dataset persil besar
+# yang memang padat di 1:2500 BOLEH tetap 1:2500.
+#
+# Karena itu tiap lembar Auto DINILAI pada skalanya sendiri, dari dua
+# ukuran yang bisa dihitung:
+#   (a) fill fraction = luas bbox persil / luas frame peta di tanah
+#       (target ~0,30-0,60; < 0,15 = lembar terlalu kosong);
+#   (b) rasio label = lebar label / lebar persil di kertas, median
+#       per lembar (target ~0,3-0,5; > 0,60 = label nyaris memenuhi
+#       persil, sulit dibaca).
+# Ambang fill 0,15 (bukan 0,20): bukti dari dua dataset — lembar
+# 1:500 yang BENAR (persil kecil, skala tepat) punya fill 0,16-0,19,
+# sementara lembar 1:1500/1:2500 yang bermasalah (lembar ~90% kosong)
+# punya fill 0,08-0,13. Ambang 0,20 salah menandai lembar 1:500 yang
+# benar sebagai gagal, sehingga persilnya dipecah sampai 1:250 (uji
+# pertama v0.6.1: PBT_2091 meledak dari 7 menjadi 16 lembar).
+# Lembar dengan < 10 bidang TIDAK dinilai (lihat _rescore_auto_sheets):
+# kekosongan / kesesakan label pada lembar kecil adalah masalah JUMLAH
+# bidang, bukan skala — merge_small_accs yang mengurusnya.
+# Lembar yang gagal (fill < 0,15 ATAU median rasio > 0,60) diturunkan
+# satu tingkat (zoom-in) dan persilnya dikelompokkan ulang pada skala
+# baru, lalu dinilai lagi — sampai lolos atau mencapai skala terkecil
+# (1:250). Penilaian hanya bisa MENURUNKAN skala lembar, tidak pernah
+# menaikkan di atas D_max terkecil persil di dalamnya (skala awal =
+# tier D_max, dan tiap langkah hanya turun). Jumlah lembar bukan
+# kriteria keras: lebih sedikit lebih baik, tapi TIDAK boleh
+# mengorbankan fill dan rasio label.
+# Catatan: penilaian jalan SEBELUM merge_small_accs. Lembar hasil
+# merge mewarisi kelolosan: gabungan dua lembar yang lolos, pada skala
+# min, punya fill >= fill tiap penyusun (bbox gabungan >= bbox
+# penyusun, frame min <= frame penyusun) dan median rasio <= maks
+# median penyusun (tiap persil di skala min rasionya <= rasio di skala
+# asalnya) — jadi lembar merge tidak perlu dinilai ulang.
+
+AUTO_MIN_FILL = 0.15
+AUTO_MAX_LABEL_RATIO = 0.60
+
+
+def sheet_fill_fraction(acc, map_mm):
+    """Luas bbox persil / luas frame peta di tanah (0..1)."""
+    den = acc.scale if acc.scale else 1000.0
+    frame_w = map_mm[0] / 1000.0 * den
+    frame_h = map_mm[1] / 1000.0 * den
+    frame_area = frame_w * frame_h
+    if frame_area <= 0:
+        return 0.0
+    return area(acc.bbox) / frame_area
+
+
+def sheet_label_ratio_median(acc, parcels_by_id):
+    """Median rasio lebar label / lebar persil di kertas untuk persil
+    di lembar ini (0 bila tidak ada persil yang bisa dihitung)."""
+    den = acc.scale if acc.scale else 1000.0
+    font_pt = label_font_size_pt(den)
+    ratios = []
+    for pid in acc.ids:
+        p = parcels_by_id.get(pid)
+        if p is None or p.label_len <= 0:
+            continue
+        paper_w_mm = (p.bbox[2] - p.bbox[0]) / den * 1000.0
+        if paper_w_mm <= 0:
+            continue
+        label_w_mm = p.label_len * LABEL_CHAR_WIDTH_FACTOR * font_pt * PT_TO_MM
+        ratios.append(label_w_mm / paper_w_mm)
+    if not ratios:
+        return 0.0
+    ratios.sort()
+    n = len(ratios)
+    if n % 2:
+        return ratios[n // 2]
+    return (ratios[n // 2 - 1] + ratios[n // 2]) / 2.0
+
+
+def sheet_score_ok(acc, parcels_by_id, map_mm):
+    """(lolos, fill, rasio_median) — lolos bila fill >= AUTO_MIN_FILL
+    dan median rasio <= AUTO_MAX_LABEL_RATIO."""
+    fill = sheet_fill_fraction(acc, map_mm)
+    ratio = sheet_label_ratio_median(acc, parcels_by_id)
+    return (fill >= AUTO_MIN_FILL and ratio <= AUTO_MAX_LABEL_RATIO, fill, ratio)
+
+
+def sheet_group_metrics(groups, boxes, map_mm):
+    """Metrik per lembar untuk tabel Preview (v0.6.2): daftar dict
+    {id, scale, count, fill, ratio, ok, warnings} — bbox tiap lembar
+    direkonstruksi dari union bbox persilnya (sama dengan acc.bbox),
+    lalu dinilai dengan sheet_score_ok yang sama dengan penilaian
+    Auto v0.6.1. Lembar kecil (< 10 bidang) tetap dilaporkan apa
+    adanya (fill/rasio bisa gagal — itu urusan merge, bukan skala)."""
+    parcels_by_id = {b.id: b for b in boxes}
+    out = []
+    for g in groups:
+        ids = [fid for fid in g.feature_ids if fid in parcels_by_id]
+        if ids:
+            bbox = parcels_by_id[ids[0]].bbox[:]
+            for fid in ids[1:]:
+                bbox = union(bbox, parcels_by_id[fid].bbox)
+        else:
+            bbox = list(g.extent)
+        acc = Acc(list(g.feature_ids), bbox, scale=parse_scale(g.scale))
+        ok, fill, ratio = sheet_score_ok(acc, parcels_by_id, map_mm)
+        out.append(
+            {
+                "id": g.id,
+                "scale": g.scale,
+                "count": len(g.feature_ids),
+                "fill": fill,
+                "ratio": ratio,
+                "ok": ok,
+                "warnings": list(g.warnings),
+            }
+        )
+    return out
+
+
+def _regroup_at_scale(members, new_den, map_mm):
+    """Kelompokkan ulang persil pada skala baru (v0.6.1).
+
+    Bila semua persil muat dalam satu frame pada skala baru, kembalikan
+    SATU acc (persil tetap bersama). Ini sengaja TIDAK memakai
+    _accs_at_scale: pemecahan grid/blok di sana memecah lembar yang
+    sudah kohesif menjadi banyak lembar kecil, yang lalu gagal fill
+    lagi dan berjatuhan sampai 1:250 (terbukti di uji pertama v0.6.1:
+    PBT_2091 meledak dari 7 menjadi 16 lembar, 8 di antaranya 1:250).
+    Penilaian skala mengubah SKALA, bukan pengelompokan — jadi persil
+    tetap bersama selama muat; hanya bila tidak muat, pecah dengan
+    greedy (greedy_accs) seminimal mungkin."""
+    merged = members[0].bbox[:]
+    for f in members[1:]:
+        merged = union(merged, f.bbox)
+    if len(members) <= MAX_FEATURES_PER_SHEET and fits_at(merged, map_mm, new_den):
+        return [Acc([f.id for f in members], merged, scale=new_den)]
+    return greedy_accs(members, scale_label(new_den), map_mm)
+
+
+def _rescore_auto_sheets(accs, parcels, map_mm):
+    """Turunkan skala lembar Auto yang gagal penilaian (v0.6.1).
+
+    Tiap acc yang fill < AUTO_MIN_FILL atau median rasio label >
+    AUTO_MAX_LABEL_RATIO diturunkan satu tingkat (OFFICIAL_SCALES ke
+    bawah) dan persilnya dikelompokkan ulang pada skala baru via
+    _regroup_at_scale (tetap bersama bila muat, greedy-split bila
+    tidak); hasilnya dinilai lagi sampai lolos atau mencapai 1:250.
+    Acc dengan < MIN_FEATURES_PER_SHEET bidang TIDAK dinilai: pada
+    lembar kecil, kekosongan / kesesakan label adalah masalah JUMLAH
+    bidang, bukan skala — merge_small_accs (yang jalan sesudah ini)
+    yang mengurusnya. Tanpa pengecualian ini, lembar kecil yang gagal
+    fill dipecah sampai 1:250 dan tidak bisa digabung lagi (frame
+    1:250 terlalu kecil), sehingga jumlah lembar meledak.
+    Mengembalikan daftar acc baru (lembar yang lolos / kecil tidak
+    disentuh). Berhenti dijamin: tiap penggantian menurunkan skala,
+    dan skala terbawah 1:250."""
+    parcels_by_id = {p.id: p for p in parcels}
+    pending = list(accs)
+    result = []
+    guard = 0
+    while pending:
+        guard += 1
+        if guard > 10000:
+            # Pengaman: tidak boleh loop selamanya (skala terbatas,
+            # jadi ini tidak seharusnya tercapai).
+            result.extend(pending)
+            break
+        acc = pending.pop(0)
+        if len(acc.ids) < MIN_FEATURES_PER_SHEET:
+            # Lembar kecil: bukan urusan penilaian skala (lihat di atas).
+            result.append(acc)
+            continue
+        ok, _fill, _ratio = sheet_score_ok(acc, parcels_by_id, map_mm)
+        if ok:
+            result.append(acc)
+            continue
+        den = acc.scale if acc.scale else OFFICIAL_SCALES[-1]
+        idx = (
+            OFFICIAL_SCALES.index(den)
+            if den in OFFICIAL_SCALES
+            else len(OFFICIAL_SCALES) - 1
+        )
+        if idx <= 0:
+            # Sudah di skala terkecil (1:250) — tidak bisa turun lagi.
+            result.append(acc)
+            continue
+        new_den = OFFICIAL_SCALES[idx - 1]
+        members = [parcels_by_id[i] for i in acc.ids if i in parcels_by_id]
+        if not members:
+            result.append(acc)
+            continue
+        pending.extend(_regroup_at_scale(members, new_den, map_mm))
+    return result
+
+
+
+# ---------------------------------------------------------------------------
+# Pembagian lembar Auto per BLOK / wilayah (v0.6.2)
+# ---------------------------------------------------------------------------
+# Masalah v0.6.0-v0.6.1: persil dipilah ke tier skala PER PERSIL
+# (parcel_max_denominator) SEBELUM dikelompokkan. Persil besar dan kecil
+# yang bertetangga di satu blok jatuh ke tier berbeda, sehingga tiap
+# tier membentuk lembar yang bentangannya menutupi seluruh area dan
+# saling tumpang-tindih (uji PBT_2130: 13 lembar, hampir semua frame
+# saling menimpa; tiap PDF hanya memuat persil "bolong-bolong" yang
+# tersebar). Hasilnya tidak menyatu per blok dan terlihat tidak rapi.
+#
+# v0.6.2 membalik urutannya: WILAYAH DULU, SKALA KEMUDIAN.
+#   1. Mulai dari satu unit (seluruh persil, atau tiap blok bila ada
+#      pembagi jalan/irigasi — detect_blocks).
+#   2. Untuk sebuah unit, skala lembar = skala resmi TERKECIL yang
+#      frame-nya memuat bbox unit (fill terbaik). Unit diterima bila
+#      <= MAX_FEATURES_PER_SHEET bidang dan lolos penilaian label
+#      (median rasio label <= AUTO_MAX_LABEL_RATIO dan sebagian besar
+#      label muat, lihat _auto_unit_ok).
+#   3. Bila tidak diterima, unit DIPOTONG SECARA SPASIAL menjadi dua
+#      bagian kompak (_split_unit_spatial: potong di celah/pemisah
+#      terlebar dekat median, sehingga sedikit persil yang terbelah)
+#      lalu tiap bagian diproses dengan aturan yang sama.
+# Akibatnya tiap lembar adalah satu wilayah yang kompak, lembar yang
+# bertetangga tidak saling menimpa, dan skala tiap lembar tetap
+# menyesuaikan isinya (area persil kecil -> skala besar / zoom-in;
+# area persil besar -> skala kecil). Skala tetap campuran antar
+# lembar, tetapi TIDAK PERNAH dicampur di dalam satu wilayah.
+
+AUTO_MIN_LABEL_FIT_FRACTION = 0.80
+AUTO_SPLIT_MIN_SIDE_FRACTION = 0.25
+
+
+def _bbox_of(members):
+    box = members[0].bbox[:]
+    for f in members[1:]:
+        box = union(box, f.bbox)
+    return box
+
+
+def _smallest_fitting_scale(bbox, map_mm):
+    """Skala resmi terkecil (penyebut terkecil) yang frame-nya memuat
+    bbox; None bila bahkan 1:2500 tidak memuat."""
+    for d in OFFICIAL_SCALES:
+        if fits_at(bbox, map_mm, d):
+            return d
+    return None
+
+
+def _auto_unit_ok(members, den, parcels_by_id=None):
+    """Penilaian label sebuah unit pada skala `den` (lembar < 10 bidang
+    tidak dinilai — urusan merge_small_accs, sama seperti v0.6.1)."""
+    if len(members) < MIN_FEATURES_PER_SHEET:
+        return True
+    acc = Acc([f.id for f in members], _bbox_of(members), scale=den)
+    by_id = {f.id: f for f in members}
+    if sheet_label_ratio_median(acc, by_id) > AUTO_MAX_LABEL_RATIO:
+        return False
+    known = [f for f in members if f.label_len > 0]
+    if known:
+        fit = sum(1 for f in known if label_fits(f, den))
+        if fit / float(len(known)) < AUTO_MIN_LABEL_FIT_FRACTION:
+            return False
+    return True
+
+
+def _split_unit_spatial(members):
+    """Potong unit jadi dua bagian kompak. Urut menurut pusat persil
+    sepanjang sumbu terpanjang bbox; titik potong dipilih pada celah
+    terlebar (jarak tepi bbox kiri-maks ke kanan-min) di rentang
+    tengah, supaya persil yang terbelah sesedikit mungkin."""
+    n = len(members)
+    bbox = _bbox_of(members)
+    width = bbox[2] - bbox[0]
+    height = bbox[3] - bbox[1]
+    axes = [0, 1] if width >= height else [1, 0]
+    min_side = max(1, int(n * AUTO_SPLIT_MIN_SIDE_FRACTION))
+
+    def best_cut(axis):
+        ordered = sorted(
+            members, key=lambda f: ((f.bbox[axis] + f.bbox[axis + 2]) / 2.0, f.id)
+        )
+        # prefix max tepi atas / suffix min tepi bawah sepanjang sumbu
+        pre_max = []
+        cur = -math.inf
+        for f in ordered:
+            cur = max(cur, f.bbox[axis + 2])
+            pre_max.append(cur)
+        suf_min = [0.0] * n
+        cur = math.inf
+        for i in range(n - 1, -1, -1):
+            cur = min(cur, ordered[i].bbox[axis])
+            suf_min[i] = cur
+        best = None
+        mid = n / 2.0
+        for k in range(min_side, n - min_side + 1):
+            if k <= 0 or k >= n:
+                continue
+            gap = suf_min[k] - pre_max[k - 1]
+            key = (gap, -abs(k - mid))
+            if best is None or key > best[0]:
+                best = (key, k)
+        if best is None:
+            k = n // 2
+            gap = suf_min[k] - pre_max[k - 1]
+            best = ((gap, 0), k)
+        return ordered, best[1], best[0][0]
+
+    primary = best_cut(axes[0])
+    chosen = primary
+    if primary[2] < 0:
+        secondary = best_cut(axes[1])
+        if secondary[2] > 0:
+            chosen = secondary
+    ordered, k, _gap = chosen
+    return ordered[:k], ordered[k:]
+
+
+def _auto_partition_unit(members, map_mm, out):
+    """Rekursif: terima unit sebagai satu lembar atau potong spasial."""
+    stack = [members]
+    guard = 0
+    while stack:
+        guard += 1
+        if guard > 100000:
+            # Pengaman: tidak boleh loop selamanya.
+            for m in stack:
+                out.append(Acc([f.id for f in m], _bbox_of(m), scale=OFFICIAL_SCALES[-1]))
+            return
+        cur = stack.pop()
+        bbox = _bbox_of(cur)
+        den = _smallest_fitting_scale(bbox, map_mm)
+        if den is not None and len(cur) <= MAX_FEATURES_PER_SHEET and _auto_unit_ok(cur, den):
+            out.append(Acc([f.id for f in cur], bbox, scale=den))
+            continue
+        if len(cur) <= 1:
+            # Satu persil: tidak bisa dipotong lagi. Skala = yang
+            # terkecil yang memuat; bila tidak ada, 1:2500 (peringatan
+            # "lebih besar dari area peta" muncul di _build_groups).
+            out.append(
+                Acc([f.id for f in cur], bbox, scale=den if den else OFFICIAL_SCALES[-1])
+            )
+            continue
+        left, right = _split_unit_spatial(cur)
+        if not left or not right:
+            out.append(
+                Acc([f.id for f in cur], bbox, scale=den if den else OFFICIAL_SCALES[-1])
+            )
+            continue
+        # LIFO: dorong kanan dulu supaya kiri diproses lebih awal.
+        stack.append(right)
+        stack.append(left)
+
+
+# v0.6.3: pengaman "bidang loncat". Pemotongan spasial kadang membuat
+# satu bidang tersangkut di lembar yang bidang lainnya jauh darinya,
+# sehingga lembar jadi memanjang/bolong dan bidang itu tampak "loncat".
+# Perbaikan: bidang yang menyendiri DIPINDAHKAN ke lembar tetangga yang
+# menampungnya; bila tidak ada, dibiarkan (tidak membuat lembar 1 bidang
+# baru). Terukur di PBT_2091: reattach memindahkan 16 bidang; di
+# PBT_2130: 0 bidang (tidak ada yang memenuhi syarat pindah).
+AUTO_ISOLATION_GAP_FRACTION = 0.08
+AUTO_MERGE_MAX_GAP_FRACTION = 0.12
+
+
+def _bbox_gap(a, b):
+    """Jarak terdekat antara dua bbox (0 bila bersentuhan/tumpang)."""
+    dx = max(0.0, max(b[0] - a[2], a[0] - b[2]))
+    dy = max(0.0, max(b[1] - a[3], a[1] - b[3]))
+    return math.hypot(dx, dy)
+
+
+def _reattach_strays(accs, parcels_by_id, map_mm):
+    """Pindahkan bidang yang menyendiri (jarak ke anggota terdekat di
+    lembarnya > AUTO_ISOLATION_GAP_FRACTION x lebar frame di tanah) ke
+    lembar tetangga terdekat yang: (a) muat satu bidang lagi
+    (<= MAX_FEATURES_PER_SHEET), (b) bbox gabungannya muat pada skala
+    lembar itu, (c) jaraknya <= batas isolasi lembar itu, dan (d) label
+    bidang masih muat (skala lembar tujuan <= skala asal, atau
+    label_fits). Bidang tanpa lembar tujuan dibiarkan di tempatnya.
+    Mengembalikan daftar acc (objek Acc diperbarui di tempat)."""
+    for _pass in range(8):
+        moved = False
+        for src in list(accs):
+            if len(src.ids) < 2:
+                continue
+            src_den = src.scale if src.scale else OFFICIAL_SCALES[-1]
+            limit = map_mm[0] / 1000.0 * src_den * AUTO_ISOLATION_GAP_FRACTION
+            members = [parcels_by_id[i] for i in src.ids if i in parcels_by_id]
+            strays = []
+            for f in members:
+                nearest = min(
+                    _bbox_gap(f.bbox, o.bbox) for o in members if o is not f
+                )
+                if nearest > limit:
+                    strays.append((nearest, f))
+            if not strays:
+                continue
+            strays.sort(key=lambda t: -t[0])
+            for _gap, f in strays:
+                if len(src.ids) < 2:
+                    break
+                best = None
+                for tgt in accs:
+                    if tgt is src or len(tgt.ids) >= MAX_FEATURES_PER_SHEET:
+                        continue
+                    tden = tgt.scale if tgt.scale else OFFICIAL_SCALES[-1]
+                    if not fits_at(union(tgt.bbox, f.bbox), map_mm, tden):
+                        continue
+                    if not (tden <= src_den or label_fits(f, tden)):
+                        continue
+                    tmem = [parcels_by_id[i] for i in tgt.ids if i in parcels_by_id]
+                    if not tmem:
+                        continue
+                    g = min(_bbox_gap(f.bbox, o.bbox) for o in tmem)
+                    if g > map_mm[0] / 1000.0 * tden * AUTO_ISOLATION_GAP_FRACTION:
+                        continue
+                    if g < _gap and (best is None or g < best[0]):
+                        best = (g, tgt)
+                if best is None:
+                    continue
+                tgt = best[1]
+                src.ids.remove(f.id)
+                tgt.ids.append(f.id)
+                tgt.bbox = union(tgt.bbox, f.bbox)
+                rest = [parcels_by_id[i] for i in src.ids if i in parcels_by_id]
+                if rest:
+                    src.bbox = _bbox_of(rest)
+                moved = True
+        if not moved:
+            break
+    return accs
+
+
+def _auto_accs(parcels, dividers, map_mm):
+    """Auto v0.6.2: wilayah dulu, skala kemudian. Mengembalikan Acc."""
+    if dividers:
+        units = detect_blocks(parcels, dividers)
+    else:
+        units = [list(parcels)]
+    accs = []
+    for unit in units:
+        if unit:
+            _auto_partition_unit(unit, map_mm, accs)
+    return accs
+
+
 def parcel_color_rgb(name):
     """Palet bernama — sama dengan parcel_color_rgb() di Rust."""
     key = (name or "").strip().lower()
@@ -180,15 +688,21 @@ def text_color_rgb(name):
 
 
 class FeatureBox:
-    """Satu fitur: id (pk sebagai string), bbox, cincin poligon, KET."""
+    """Satu fitur: id (pk sebagai string), bbox, cincin poligon, KET.
 
-    __slots__ = ("id", "bbox", "rings", "ket")
+    label_len = panjang (karakter) baris label terpanjang (NAMA / NIB /
+    L=...m2) — dipakai mode Auto campuran v0.6.0 untuk menentukan skala
+    terbesar yang labelnya masih muat. 0 = tidak diketahui (dianggap
+    muat di semua skala)."""
 
-    def __init__(self, fid, bbox, rings, ket):
+    __slots__ = ("id", "bbox", "rings", "ket", "label_len")
+
+    def __init__(self, fid, bbox, rings, ket, label_len=0):
         self.id = str(fid)
         self.bbox = list(bbox)
         self.rings = rings
         self.ket = ket
+        self.label_len = int(label_len) if label_len else 0
 
     def center(self):
         return (
@@ -198,11 +712,14 @@ class FeatureBox:
 
 
 class Acc:
-    __slots__ = ("ids", "bbox")
+    __slots__ = ("ids", "bbox", "scale")
 
-    def __init__(self, ids, bbox):
+    def __init__(self, ids, bbox, scale=None):
         self.ids = list(ids)
         self.bbox = list(bbox)
+        # scale = penyebut skala lembar ini (mis. 500.0). None = belum
+        # ditentukan (diisi pemanggil dari skala tier / skala tetap).
+        self.scale = scale
 
 
 class SheetGroup:
@@ -375,6 +892,9 @@ def detect_blocks(parcels, dividers):
 
 
 def greedy_accs(features, requested_scale, map_mm):
+    den = parse_scale(requested_scale)
+    if den is None:
+        den = 1000.0
     accs = []
     for feature in features:
         best = None  # (index, growth)
@@ -392,11 +912,18 @@ def greedy_accs(features, requested_scale, map_mm):
             accs[index].bbox = union(accs[index].bbox, feature.bbox)
             accs[index].ids.append(feature.id)
         else:
-            accs.append(Acc([feature.id], feature.bbox))
+            accs.append(Acc([feature.id], feature.bbox, scale=den))
     return accs
 
 
-def merge_small_accs(accs, map_mm, denominator):
+def merge_small_accs(accs, map_mm, denominator, max_gap_fraction=None):
+    """Gabung lembar kecil (< MIN_FEATURES_PER_SHEET) ke tetangga terdekat.
+
+    Scale-aware (v0.6.0): dua lembar boleh gabung hanya bila bbox gabungan
+    muat pada skala min(D_A, D_B) — skala hasil gabungan = min itu,
+    sehingga label semua persil tetap muat (min ≤ D_max tiap persil).
+    Bila acc.scale None, dipakai `denominator` (jalur skala eksplisit lama,
+    semua lembar satu skala — perilaku tidak berubah)."""
     def center(bbox):
         return ((bbox[0] + bbox[2]) / 2.0, (bbox[1] + bbox[3]) / 2.0)
 
@@ -423,9 +950,18 @@ def merge_small_accs(accs, map_mm, denominator):
         for j in cands:
             n = len(work[i].ids) + len(work[j].ids)
             bbox = union(work[i].bbox, work[j].bbox)
-            if n <= MAX_FEATURES_PER_SHEET and fits_at(bbox, map_mm, denominator):
+            den = min(
+                work[i].scale if work[i].scale else denominator,
+                work[j].scale if work[j].scale else denominator,
+            )
+            if max_gap_fraction is not None:
+                # v0.6.3 (Auto): jangan melompati celah lebar.
+                limit = map_mm[0] / 1000.0 * den * max_gap_fraction
+                if _bbox_gap(work[i].bbox, work[j].bbox) > limit:
+                    continue
+            if n <= MAX_FEATURES_PER_SHEET and fits_at(bbox, map_mm, den):
                 ids = work[i].ids + work[j].ids
-                work[j] = Acc(ids, bbox)
+                work[j] = Acc(ids, bbox, scale=den)
                 del work[i]
                 unmergeable = [u - 1 if u > i else u for u in unmergeable]
                 merged = True
@@ -444,30 +980,15 @@ def merge_small_accs(accs, map_mm, denominator):
 # ---------------------------------------------------------------------------
 
 
-def group_feature_boxes(features, requested_scale, map_mm):
-    err = validate_requested_scale(requested_scale)
-    if err:
-        raise ValueError(err)
-    features = sorted(
-        features,
-        key=lambda f: (-f.center()[1], f.center()[0], f.id),
-    )
-    parcels = [f for f in features if not (is_special_ket(f.ket) and f.rings)]
-    dividers = [f for f in features if is_special_ket(f.ket) and f.rings]
-    if not parcels:
-        raise ValueError("Tidak ada fitur untuk dikelompokkan.")
+def _accs_at_scale(parcels, dividers, denominator, map_mm):
+    """Grid/detect_blocks + greedy pada SATU skala. Mengembalikan daftar Acc
+    (masing-masing .scale = denominator). Tanpa merge kecil — merge
+    dilakukan pemanggil (merge_small_accs)."""
+    win_w = map_mm[0] / 1000.0 * denominator * FILL_RATIO
+    win_h = map_mm[1] / 1000.0 * denominator * FILL_RATIO
     total = parcels[0].bbox[:]
     for p in parcels[1:]:
         total = union(total, p.bbox)
-    if requested_scale == "Auto":
-        denominator = next(
-            (d for d in OFFICIAL_SCALES if fits_at(total, map_mm, d)),
-            OFFICIAL_SCALES[-1],
-        )
-    else:
-        denominator = parse_scale(requested_scale) or 1000.0
-    win_w = map_mm[0] / 1000.0 * denominator * FILL_RATIO
-    win_h = map_mm[1] / 1000.0 * denominator * FILL_RATIO
     total_w = max(0.0, total[2] - total[0])
     total_h = max(0.0, total[3] - total[1])
 
@@ -495,16 +1016,22 @@ def group_feature_boxes(features, requested_scale, map_mm):
         for f in cell[1:]:
             merged = union(merged, f.bbox)
         if len(cell) <= MAX_FEATURES_PER_SHEET and fits_at(merged, map_mm, denominator):
-            accs.append(Acc([f.id for f in cell], merged))
+            accs.append(Acc([f.id for f in cell], merged, scale=denominator))
         else:
             accs.extend(greedy_accs(cell, fixed_scale, map_mm))
+    return accs
 
-    accs, small_leftovers = merge_small_accs(accs, map_mm, denominator)
+
+def _build_groups(accs, small_leftovers, map_mm, label_warnings):
+    """Acc -> SheetGroup. Tiap lembar memakai skalanya sendiri (acc.scale);
+    label_warnings = {id_persil: pesan} ditempel ke lembar pemiliknya."""
     accs.sort(key=lambda a: (-((a.bbox[1] + a.bbox[3]) / 2.0), (a.bbox[0] + a.bbox[2]) / 2.0))
 
     width = max(2, len(str(max(1, len(accs)))))
     groups = []
     for index, acc in enumerate(accs):
+        denominator = acc.scale if acc.scale else 1000.0
+        fixed_scale = scale_label(denominator)
         ok = fits_at(acc.bbox, map_mm, denominator)
         warnings = []
         if not ok:
@@ -519,6 +1046,9 @@ def group_feature_boxes(features, requested_scale, map_mm):
                 "tidak ada lembar tetangga yang bisa digabung tanpa melampaui "
                 "frame {}.".format(len(acc.ids), MIN_FEATURES_PER_SHEET, fixed_scale)
             )
+        for pid in acc.ids:
+            if pid in label_warnings:
+                warnings.append(label_warnings[pid])
         center = ((acc.bbox[0] + acc.bbox[2]) / 2.0, (acc.bbox[1] + acc.bbox[3]) / 2.0)
         groups.append(
             SheetGroup(
@@ -530,6 +1060,62 @@ def group_feature_boxes(features, requested_scale, map_mm):
             )
         )
     return groups
+
+
+def group_feature_boxes(features, requested_scale, map_mm):
+    """Bagi fitur jadi lembar.
+
+    Skala eksplisit (1:250..1:2500): SATU skala untuk semua lembar,
+    sama persis seperti v0.5.9.
+
+    Auto (v0.6.0, campuran): tiap persil masuk tier menurut skala
+    TERBESAR yang labelnya masih muat (parcel_max_denominator); tiap
+    tier dikelompokkan pada skalanya sendiri; merge_small_accs yang
+    scale-aware lalu boleh menggabung lembar kecil antar-tier (skala
+    hasil = min). Tiap lembar mendapat skalanya sendiri.
+
+    Auto (v0.6.2, wilayah dulu): unit (seluruh persil, atau tiap blok
+    bila ada pembagi jalan/irigasi) dipotong secara spasial menjadi
+    wilayah kompak; tiap lembar memakai skala resmi terkecil yang
+    memuat wilayahnya dan lolos penilaian label (_auto_accs). Skala
+    campuran antar lembar, tidak pernah di dalam satu wilayah.
+    (Tier per persil v0.6.0 dan _rescore_auto_sheets v0.6.1 tidak
+    lagi dipakai oleh jalur Auto.)"""
+    err = validate_requested_scale(requested_scale)
+    if err:
+        raise ValueError(err)
+    features = sorted(
+        features,
+        key=lambda f: (-f.center()[1], f.center()[0], f.id),
+    )
+    parcels = [f for f in features if not (is_special_ket(f.ket) and f.rings)]
+    dividers = [f for f in features if is_special_ket(f.ket) and f.rings]
+    if not parcels:
+        raise ValueError("Tidak ada fitur untuk dikelompokkan.")
+    if requested_scale == "Auto":
+        # v0.6.2: wilayah dulu, skala kemudian (lihat _auto_accs).
+        # Peringatan label per persil (label tidak muat bahkan di
+        # 1:250) tetap dihitung dari parcel_max_denominator.
+        label_warnings = {}
+        for p in parcels:
+            _d, warn = parcel_max_denominator(p)
+            if warn:
+                label_warnings[p.id] = warn
+        accs = _auto_accs(parcels, dividers, map_mm)
+        # v0.6.3: bidang yang menyendiri dipindah ke lembar tetangga.
+        accs = _reattach_strays(accs, {p.id: p for p in parcels}, map_mm)
+        # merge_small_accs scale-aware: lembar < 10 bidang digabung ke
+        # tetangga terdekat bila bbox gabungan muat pada skala min
+        # (tidak melompati celah lebar — lihat max_gap_fraction).
+        accs, small_leftovers = merge_small_accs(
+            accs, map_mm, OFFICIAL_SCALES[-1],
+            max_gap_fraction=AUTO_MERGE_MAX_GAP_FRACTION,
+        )
+        return _build_groups(accs, small_leftovers, map_mm, label_warnings)
+    denominator = parse_scale(requested_scale) or 1000.0
+    accs = _accs_at_scale(parcels, dividers, denominator, map_mm)
+    accs, small_leftovers = merge_small_accs(accs, map_mm, denominator)
+    return _build_groups(accs, small_leftovers, map_mm, {})
 
 # ---------------------------------------------------------------------------
 # Bagian PyQGIS (import malas — modul tetap bisa di-import tanpa QGIS
@@ -884,12 +1470,169 @@ def apply_parcel_style(layer, outline_rgb, text_rgb, fields, denominator):
     layer.triggerRepaint()
 
 
+def _as_multipolygon(geom):
+    """Kembalikan geometri sebagai MultiPolygon (atau None).
+
+    intersection() pembagi dengan buffer bisa menghasilkan Polygon,
+    MultiPolygon, atau GeometryCollection — layer memori pembagi bertipe
+    MultiPolygon, jadi semua bagian poligon disatukan ke bentuk itu."""
+    from qgis.core import QgsGeometry, QgsWkbTypes
+
+    if geom is None or geom.isEmpty():
+        return None
+    if geom.wkbType() == QgsWkbTypes.Polygon:
+        return QgsGeometry.fromMultiPolygonXY([geom.asPolygon()])
+    if geom.wkbType() == QgsWkbTypes.MultiPolygon:
+        return QgsGeometry(geom)
+    if geom.wkbType() == QgsWkbTypes.GeometryCollection:
+        polys = []
+        for part in geom.asGeometryCollection():
+            if part.wkbType() == QgsWkbTypes.Polygon:
+                polys.append(part.asPolygon())
+            elif part.wkbType() == QgsWkbTypes.MultiPolygon:
+                polys.extend(part.asMultiPolygon())
+        if not polys:
+            return None
+        return QgsGeometry.fromMultiPolygonXY(polys)
+    return None
+
+
+def _apply_divider_style(layer):
+    """Renderer aturan POLOS untuk layer pembagi (tanpa geometry generator).
+
+    Warna sama dengan apply_parcel_style (jalan oranye #FF3F00, air
+    biru #003FFF, outline 0,5 mm, isi transparan) — hanya saja tanpa
+    trim_expression, karena geometri di layer ini SUDAH di-trim di Python
+    (lihat _trimmed_divider_layer)."""
+    from qgis.core import QgsFillSymbol, QgsRuleBasedRenderer
+
+    road = ket_ilike_expr("KET", ROAD_WORDS)
+    water = ket_ilike_expr("KET", WATER_WORDS)
+
+    def sym(rgb):
+        return QgsFillSymbol.createSimple(
+            {
+                "color": "255,255,255,0",
+                "outline_color": "{},{},{},255".format(*rgb),
+                "outline_width": "0.5",
+                "outline_width_unit": "MM",
+                "outline_style": "solid",
+            }
+        )
+
+    renderer = QgsRuleBasedRenderer(QgsFillSymbol())
+    root = renderer.rootRule()
+    if root.children():
+        root.removeChildAt(0)
+
+    def rule(symbol, filter_exp, label):
+        r = QgsRuleBasedRenderer.Rule(symbol)
+        r.setFilterExpression(filter_exp)
+        r.setLabel(label)
+        return r
+
+    root.appendChild(rule(sym((255, 63, 0)), road, "Jalan / Gang"))
+    root.appendChild(rule(sym((0, 63, 255)), water, "Sungai / Irigasi / Saluran"))
+    layer.setRenderer(renderer)
+
+
+def _trimmed_divider_layer(dividers, group, geom_by_pk, crs, layer_name):
+    """Bangun layer memori pembagi lembar ini, SUDAH di-trim di Python.
+
+    Akar masalah (v0.6.3, Preview): trim_expression memakai
+    aggregate(@layer_id, 'collect', ...) — aggregate itu hanya bisa
+    menemukan layer yang terdaftar di QgsProject.instance(). Di jalur
+    _build_qgs_project (Preview + .qgs) layer lembar tinggal di proyek
+    terpisah (out_project, bukan instance), sehingga aggregate
+    mengembalikan NULL ("Cannot find layer with name or ID") dan
+    geometry generator tidak menggambar apa pun: 0 piksel oranye/biru
+    di 16/16 PNG Preview v0.6.1+v0.6.3, padahal jalur PDF render_batch
+    (layer di instance()) menggambar jalan normal. Di sini trim
+    dilakukan di Python dengan semantik yang sama persis:
+    intersection(geom pembagi, buffer(collect(geom persil lembar),
+    TRIM_BUFFER_M)) — pembagi yang tidak menyentuh persil lembar tetap
+    dibuang, yang terlalu panjang tetap dipangkas. Pembagi yang
+    bbox-nya tidak memotong frame lembar tidak masuk (aturan subset
+    yang sama seperti sebelumnya).
+
+    Mengembalikan QgsVectorLayer memori (MultiPolygon, field KET) atau
+    None bila tidak ada pembagi yang tersisa setelah trim."""
+    from qgis.core import QgsFeature, QgsVectorLayer
+
+    def bboxes_intersect(a, b):
+        return a[0] <= b[2] and a[2] >= b[0] and a[1] <= b[3] and a[3] >= b[1]
+
+    parcel_geoms = [
+        geom_by_pk[i] for i in group.feature_ids if i in geom_by_pk
+    ]
+    if not parcel_geoms:
+        return None
+    from qgis.core import QgsGeometry
+
+    collect = QgsGeometry.collectGeometry(parcel_geoms)
+    buf = collect.buffer(TRIM_BUFFER_M, 8)
+    feats = []
+    for d in dividers:
+        if not bboxes_intersect(d.bbox, group.extent):
+            continue
+        g = geom_by_pk.get(d.id)
+        if g is None:
+            continue
+        trimmed = _as_multipolygon(g.intersection(buf))
+        if trimmed is None or trimmed.isEmpty():
+            continue
+        f = QgsFeature()
+        f.setGeometry(trimmed)
+        f.setAttributes([d.ket])
+        feats.append(f)
+    if not feats:
+        return None
+    uri = "MultiPolygon?crs={}&field=KET:string".format(crs.authid())
+    layer = QgsVectorLayer(uri, "{}_div".format(layer_name), "memory")
+    if not layer.isValid():
+        return None
+    layer.dataProvider().addFeatures(feats)
+    layer.updateExtents()
+    _apply_divider_style(layer)
+    return layer
+
+
 def read_feature_boxes(layer, pk_col):
-    """Baca fitur layer jadi FeatureBox (port load_feature_boxes)."""
+    """Baca fitur layer jadi FeatureBox (port load_feature_boxes).
+
+    label_len per fitur dihitung dari baris label yang sama dengan
+    label_expression() (NAMA / NIB / L=...m2; fitur spesial hanya NAMA)
+    — dipakai mode Auto campuran v0.6.0."""
     from qgis.core import QgsWkbTypes
 
     fields = [f.name() for f in layer.fields()]
     ket_field = next((f for f in fields if f.lower() == "ket"), None)
+    by_lower = {f.lower(): f for f in fields}
+    nama_field = by_lower.get("nama")
+    nib_field = by_lower.get("080201")
+    area_field = by_lower.get("m2") or by_lower.get("luas")
+    area_is_luas = area_field is not None and area_field.lower() == "luas"
+
+    def label_len_of(feature, ket):
+        def val(name):
+            if name is None:
+                return ""
+            v = feature.attribute(name)
+            return "" if v is None else str(v)
+
+        nama = val(nama_field)
+        if is_special_ket(ket):
+            return len(nama)
+        nib = val(nib_field)
+        raw = val(area_field)
+        if not raw:
+            luas_line = ""
+        elif area_is_luas and raw[:2] == "L=":
+            luas_line = raw
+        else:
+            luas_line = "L={}m2".format(raw)
+        return max(len(nama), len(nib), len(luas_line))
+
     boxes = []
     for feature in layer.getFeatures():
         geom = feature.geometry()
@@ -920,6 +1663,7 @@ def read_feature_boxes(layer, pk_col):
                 [bbox.xMinimum(), bbox.yMinimum(), bbox.xMaximum(), bbox.yMaximum()],
                 rings,
                 ket,
+                label_len=label_len_of(feature, ket),
             )
         )
     return boxes, fields
@@ -1085,6 +1829,19 @@ def _apply_frame_texts(layout, frame):
     from qgis.core import QgsLayoutItemLabel
 
     def _y(item):
+        # Posisi y label DI LAYOUT (mm, membesar ke bawah) — dipakai untuk
+        # membedakan label kembar (tiga "ig:@yuktech", dua PT).
+        # BUG v0.6.3: rect().top() SELALU 0.0 — rect() adalah koordinat
+        # LOKAL item, bukan posisi di layout — sehingga sort-y jadi no-op
+        # dan urutan penugasan = urutan layout.items() (sembarang):
+        # nama surveyor/penggunaan + dua PT tertukar. scenePos().y()
+        # (fallback pos().y()) mengembalikan koordinat layout yang benar
+        # (terbukti di sandbox 3.22: 177.97 / 218.76 / 259.15 dst).
+        for getter in ("scenePos", "pos"):
+            try:
+                return getattr(item, getter)().y()
+            except Exception:
+                continue
         try:
             return item.rect().top()
         except Exception:
@@ -1316,7 +2073,8 @@ def _set_sheet_subset(layer, pk_col, ids, group_id, log):
     return layer.subsetString()
 
 
-def _build_qgs_project(opts, groups, boxes, fields, pk_col, dividers, frame):
+def _build_qgs_project(opts, groups, boxes, fields, pk_col, dividers, frame,
+                     return_project=False):
     """Bangun SATU proyek QGIS (.qgs) berisi SEMUA lembar sebagai layout.
 
     Proyek terpisah (bukan QgsProject.instance()) supaya tidak menyentuh
@@ -1324,7 +2082,9 @@ def _build_qgs_project(opts, groups, boxes, fields, pk_col, dividers, frame):
     vektor sendiri (subset per-lembar — subset adalah properti layer,
     jadi satu layer tidak bisa melayani 10 layout) + layout sendiri dari
     template, dengan isi frame + nilai lembar yang sama seperti PDF.
-    Mengembalikan path .qgs (PBTF_{batch}.qgs di folder output)."""
+    Mengembalikan path .qgs (PBTF_{batch}.qgs di folder output), atau
+    (path, proyek) bila return_project=True (dipakai render_preview
+    v0.6.2 untuk mengekspor PNG dari layout yang sudah dibangun)."""
     from qgis.core import (
         QgsLayoutItemLabel,
         QgsLayoutItemMap,
@@ -1350,6 +2110,15 @@ def _build_qgs_project(opts, groups, boxes, fields, pk_col, dividers, frame):
         raise ValueError("Layer GPKG tidak bisa dibuka: {} ({})".format(gpkg_path, layer_name))
     out_project.setCrs(probe.crs())
 
+    # Geometri asli per pk (kunci str — FeatureBox.id berupa str) untuk
+    # trim pembagi di Python (lihat _trimmed_divider_layer).
+    geom_by_pk = {}
+    for feat in probe.getFeatures():
+        key = feat.attribute(pk_col) if pk_col else feat.id()
+        g = feat.geometry()
+        if g is not None and not g.isNull():
+            geom_by_pk[str(key)] = g
+
     raster = None
     if opts["with_imagery"]:
         raster = QgsRasterLayer(opts["ecw_path"], "ECW", "gdal")
@@ -1357,27 +2126,38 @@ def _build_qgs_project(opts, groups, boxes, fields, pk_col, dividers, frame):
             raise ValueError("ECW tidak bisa dibuka: {}".format(opts["ecw_path"]))
         out_project.addMapLayer(raster, False)
 
-    denominator = parse_scale(groups[0].scale) or 1000.0
     outline_rgb = parcel_color_rgb(opts.get("parcel_color") or "hijau")
     text_rgb = text_color_rgb(opts.get("text_color") or "")
 
-    def bboxes_intersect(a, b):
-        return a[0] <= b[2] and a[2] >= b[0] and a[1] <= b[3] and a[3] >= b[1]
-
     frame_warned = False
     for index, group in enumerate(groups):
+        # Subset layer persil: HANYA persil lembar ini. Pembagi TIDAK lagi
+        # dimasukkan ke layer ini — mereka digambar dari layer memori
+        # hasil _trimmed_divider_layer (trim di Python, bukan lewat
+        # aggregate yang gagal di proyek terpisah ini).
         ids = list(group.feature_ids)
-        for d in dividers:
-            if bboxes_intersect(d.bbox, group.extent):
-                ids.append(d.id)
         sheet_layer = QgsVectorLayer(
             source, "{}_{}".format(layer_name, group.id), "ogr"
         )
         if not sheet_layer.isValid():
             raise ValueError("Layer lembar {} tidak bisa dibuat.".format(group.id))
+        # Gaya label per lembar (v0.6.0): ukuran font mengikuti skala
+        # lembar ini — di mode Auto campuran tiap lembar bisa beda skala.
+        denominator = parse_scale(group.scale) or 1000.0
         apply_parcel_style(sheet_layer, outline_rgb, text_rgb, fields, denominator)
         _set_sheet_subset(sheet_layer, pk_col, ids, group.id, log)
         out_project.addMapLayer(sheet_layer, False)
+
+        # Pembagi (jalan/air) yang sudah di-trim di Python — layer memori
+        # per lembar; None bila tidak ada pembagi yang tersisa.
+        div_layer = _trimmed_divider_layer(
+            dividers, group, geom_by_pk, probe.crs(),
+            "{}_{}".format(layer_name, group.id),
+        )
+        map_layers = [sheet_layer]
+        if div_layer is not None:
+            out_project.addMapLayer(div_layer, False)
+            map_layers.append(div_layer)
 
         layout = load_layout(opts["qpt_path"], project=out_project)
         layout.setName("PBTF {} {}".format(batch, group.id))
@@ -1395,7 +2175,7 @@ def _build_qgs_project(opts, groups, boxes, fields, pk_col, dividers, frame):
             pass
         map_item.setExtent(QgsRectangle(*group.extent))
         map_item.setLayers(
-            [sheet_layer] + ([raster] if opts["with_imagery"] and raster else [])
+            map_layers + ([raster] if opts["with_imagery"] and raster else [])
         )
         warns = _apply_frame_texts(layout, frame)
         if warns and not frame_warned:
@@ -1439,6 +2219,8 @@ def _build_qgs_project(opts, groups, boxes, fields, pk_col, dividers, frame):
     log("QGS: {} ({} layout)".format(
         os.path.basename(qgs_path), len(groups)
     ))
+    if return_project:
+        return qgs_path, out_project
     return qgs_path
 
 
@@ -1533,10 +2315,8 @@ def render_batch(opts):
         groups = groups[:1]
         log("Mode uji: hanya lembar pertama")
 
-    denominator = parse_scale(groups[0].scale) or 1000.0
     outline_rgb = parcel_color_rgb(opts.get("parcel_color") or "hijau")
     text_rgb = text_color_rgb(opts.get("text_color") or "")
-    apply_parcel_style(layer, outline_rgb, text_rgb, fields, denominator)
     frame = _frame_values(opts)
 
     dividers = [b for b in boxes if is_special_ket(b.ket) and b.rings]
@@ -1558,6 +2338,10 @@ def render_batch(opts):
             if bboxes_intersect(d.bbox, group.extent):
                 ids.append(d.id)
         _set_sheet_subset(layer, pk_col, ids, group.id, log)
+        # Gaya label per lembar (v0.6.0): ukuran font mengikuti skala
+        # lembar ini — di mode Auto campuran tiap lembar bisa beda skala.
+        denominator = parse_scale(group.scale) or 1000.0
+        apply_parcel_style(layer, outline_rgb, text_rgb, fields, denominator)
         map_item.setExtent(QgsRectangle(*group.extent))
         map_item.setLayers([layer] + ([raster] if raster else []))
         # Kembalikan label ke bentuk template dulu (lihat
@@ -1672,3 +2456,137 @@ def render_batch(opts):
             opts, groups, boxes, fields, pk_col, dividers, frame
         )
     return {"pdfs": pdfs, "zip": zip_path, "qgs": qgs_path, "groups": groups, "warnings": warnings}
+
+
+def render_preview(opts, dpi=96):
+    """Preview TANPA KUOTA (v0.6.2): grouping + bangun proyek .qgs
+    (jalur yang sama dengan render_batch) + export SATU PNG resolusi
+    rendah per lembar dari layout yang sudah dibangun.
+
+    TIDAK menulis PDF final, TIDAK membuat ZIP, dan TIDAK menyentuh
+    lisensi sama sekali (modul ini tidak mengimpor license — tidak
+    ada jalur kode dari sini ke consume_generate; kuota hanya dipakai
+    bila pengguna menekan Generate di dialog preview). Proyek QGIS
+    instance pengguna TIDAK disentuh (layout dibangun di proyek
+    terpisah lewat _build_qgs_project, sama seperti .qgs Generate).
+
+    opts: sama seperti render_batch (gpkg_path, layer_name, qpt_path,
+    ecw_path, scale, parcel_color, text_color, with_imagery,
+    without_imagery, date, pbt_number, block, logo_path, surveyor_path,
+    leader_path, first_sheet_only, log). output_dir DIABAIKAN — PNG +
+    .qgs preview ditulis ke folder temp baru (temp_dir) yang dikembalikan
+    supaya pemanggil bisa menghapusnya setelah dialog ditutup.
+    Mengembalikan dict {images, groups, qgs, warnings, metrics,
+    temp_dir} — images sejajar dengan groups (satu PNG per lembar)."""
+    import tempfile
+
+    from qgis.core import QgsLayoutExporter, QgsVectorLayer
+
+    log = opts.get("log") or (lambda msg: None)
+    err = validate_requested_scale(opts["scale"])
+    if err:
+        raise ValueError(err)
+    if not opts["with_imagery"] and not opts["without_imagery"]:
+        raise ValueError("Pilih minimal satu varian output (dengan citra atau tanpa citra).")
+    if opts["with_imagery"] and not opts.get("ecw_path"):
+        raise ValueError("Varian 'Dengan citra ECW' dipilih tetapi file ECW belum dipilih.")
+
+    gpkg_path = opts["gpkg_path"]
+    layer_name = opts["layer_name"]
+    layer = QgsVectorLayer(
+        "{}|layername={}".format(gpkg_path, layer_name), layer_name, "ogr"
+    )
+    if not layer.isValid():
+        raise ValueError("Layer GPKG tidak bisa dibuka: {} ({})".format(gpkg_path, layer_name))
+    if layer.crs().isGeographic():
+        raise ValueError(
+            "CRS layer ini geografis (derajat). Reproyeksikan ke CRS proyeksi "
+            "metrik (mis. TM-3) sebelum membuat lembar PBT."
+        )
+    log("Layer dimuat: {} ({} fitur)".format(layer_name, layer.featureCount()))
+
+    pk_col = detect_pk_column(layer)
+    boxes, fields = read_feature_boxes(layer, pk_col)
+    if not boxes:
+        raise ValueError("Tidak ada fitur dengan geometri yang bisa dibaca di layer ini.")
+    log("Fitur terbaca: {} (pk: {})".format(len(boxes), pk_col or "fid internal"))
+
+    layout = load_layout(opts["qpt_path"])
+    map_item = _find_item_by_id_ci(layout, "Map 1")
+    if map_item is None:
+        from qgis.core import QgsLayoutItemMap
+
+        for item in layout.items():
+            if isinstance(item, QgsLayoutItemMap):
+                map_item = item
+                break
+    if map_item is None:
+        raise ValueError("Item peta 'Map 1' tidak ditemukan di template QPT.")
+    rect = map_item.rect()
+    map_mm = (rect.width(), rect.height())
+
+    groups = group_feature_boxes(list(boxes), opts["scale"], map_mm)
+    log("Grouping: {} lembar ({})".format(
+        len(groups), ", ".join(str(len(g.feature_ids)) for g in groups)
+    ))
+    if opts.get("first_sheet_only"):
+        groups = groups[:1]
+        log("Mode uji: hanya lembar pertama")
+
+    metrics = sheet_group_metrics(groups, boxes, map_mm)
+    warnings = []
+    for g in groups:
+        warnings.extend(g.warnings)
+
+    dividers = [b for b in boxes if is_special_ket(b.ket) and b.rings]
+    frame = _frame_values(opts)
+    temp_dir = tempfile.mkdtemp(prefix="yuk-pbt-preview-")
+    preview_opts = dict(opts)
+    preview_opts["output_dir"] = temp_dir
+    qgs_path, project = _build_qgs_project(
+        preview_opts, groups, boxes, fields, pk_col, dividers, frame,
+        return_project=True,
+    )
+
+    # Export PNG per layout (layout dibangun _build_qgs_project dengan
+    # nama "PBTF {batch} {group.id}" — cari per grup supaya urutan
+    # images sejajar dengan groups, apa pun urutan layoutManager).
+    by_name = {}
+    for lay in project.layoutManager().layouts():
+        by_name[lay.name()] = lay
+    batch = batch_code(gpkg_path)
+    images = []
+    for group in groups:
+        lay = by_name.get("PBTF {} {}".format(batch, group.id))
+        if lay is None:
+            raise ValueError(
+                "Layout preview lembar {} tidak ditemukan di proyek.".format(group.id)
+            )
+        img_path = os.path.join(temp_dir, "preview_{}.png".format(group.id))
+        settings = QgsLayoutExporter.ImageExportSettings()
+        settings.dpi = dpi
+        exporter = QgsLayoutExporter(lay)
+        result = exporter.exportToImage(img_path, settings)
+        success_code = getattr(QgsLayoutExporter, "Success", None)
+        if success_code is None:
+            success_code = getattr(
+                QgsLayoutExporter.ExportResult, "Success", 0
+            )
+        if result != success_code or not (
+            os.path.exists(img_path) and os.path.getsize(img_path) > 0
+        ):
+            raise ValueError(
+                "Preview lembar {} gagal (kode {}).".format(group.id, result)
+            )
+        images.append(img_path)
+        log("Preview: {} ({:.0f} KB)".format(
+            os.path.basename(img_path), os.path.getsize(img_path) / 1024.0
+        ))
+    return {
+        "images": images,
+        "groups": groups,
+        "qgs": qgs_path,
+        "warnings": warnings,
+        "metrics": metrics,
+        "temp_dir": temp_dir,
+    }

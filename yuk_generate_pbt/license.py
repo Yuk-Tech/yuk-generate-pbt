@@ -1,10 +1,12 @@
-"""Gerbang kode akses beta plugin Yuk Generate PBT! (v0.5.2).
+"""Gerbang kode akses plugin Yuk Generate PBT! (v0.5.2).
 
 Dua mode validasi:
 
-1. MODE LOKAL (bila API lisensi dikosongkan): kode diperiksa terhadap
-   hash SHA-256 di CODE_HASHES, seperti v0.4.x. Kuota generate TIDAK
-   dihitung — mode ini hanya untuk pemakaian sendiri / darurat.
+1. MODE LOKAL (bila URL API lisensi kosong — nilai tersimpan di
+   QSettings; panel tidak lagi menampilkan/mengubahnya sejak v0.6.1):
+   kode diperiksa terhadap hash SHA-256 di CODE_HASHES, seperti
+   v0.4.x. Kuota generate TIDAK dihitung — mode ini hanya untuk
+   pemakaian sendiri / darurat.
 2. MODE SERVER (bawaan v0.5.1: server Supabase produksi — lihat
    DEFAULT_API_BASE_URL): kode divalidasi ke endpoint Supabase
    validate-code, dan SETIAP Generate memotong 1 generate lewat
@@ -75,14 +77,17 @@ SETTINGS_ORG = "YukGeneratePBT"
 SETTINGS_APP = "YukGeneratePBT"
 
 # URL dasar API lisensi bawaan (v0.5.1): server Supabase produksi.
-# Penguji beta tidak perlu mengisi kolom API lagi — cukup masukkan kode.
-# Kolom API di panel tetap ada sebagai override (mis. pindah server);
-# mengosongkannya berarti mode lokal. URL ini BUKAN rahasia (endpoint
-# publik; yang jadi kredensial adalah kode aksesnya).
+# Satu-satunya tempat URL ini ada di kode — panel TIDAK menampilkannya
+# (v0.6.1, keputusan Derana: pengguna hanya melihat kolom kode akses,
+# tanpa tahu alamat API-nya, sama seperti YUK Entry). Penguji beta
+# cukup masukkan kode akses. URL ini BUKAN rahasia (endpoint publik;
+# yang jadi kredensial adalah kode aksesnya). Nilai tersimpan di
+# QSettings (license/api_base) dari mesin lama tetap dihormati
+# diam-diam sebagai fallback internal.
 DEFAULT_API_BASE_URL = "https://hjqmyjrjiktvdqgjkrvp.supabase.co/functions/v1"
 
 # URL dasar API lisensi aktif (tanpa garis miring di akhir).
-# Diatur panel dari QSettings saat startup (lihat panel.py); bila belum
+# Diatur dari QSettings saat startup panel (lihat panel.py); bila belum
 # pernah diatur, dipakai DEFAULT_API_BASE_URL.
 API_BASE_URL = DEFAULT_API_BASE_URL
 
@@ -194,7 +199,7 @@ def consume_generate():
       hanya untuk kompatibilitas transisi dengan function lama."""
     if not API_BASE_URL:
         if not is_activated():
-            return False, "Masukkan kode akses beta dulu.", None
+            return False, "Masukkan kode akses dulu.", None
         return True, "Mode lokal — generate tidak dihitung.", None
     try:
         code = stored_code()
@@ -202,7 +207,7 @@ def consume_generate():
     except Exception:
         code, stored = "", ""
     if not code:
-        return False, "Masukkan kode akses beta dulu.", None
+        return False, "Masukkan kode akses dulu.", None
     if is_expired():
         return False, "Masa beta berakhir 31 Des 2026.", None
     try:
@@ -385,4 +390,4 @@ def status_text():
         remaining = remaining_generates()
         if remaining is not None and remaining <= 0:
             return "Kode ini sudah habis (0 generate tersisa) — masukkan kode baru."
-    return "Belum aktif — masukkan kode akses beta."
+    return "Belum aktif — masukkan kode akses."
