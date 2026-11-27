@@ -11,7 +11,8 @@ Yang di-port 1:1 dari src-tauri/src/engine.rs:
   opsi A v17.8), termasuk konstanta sel 2 m / buffer 2 m / trim 5 m;
 - renderer aturan KET (jalan merah #FF3F00, air biru #003FFF, persil warna
   pilihan) + trim GeometryGenerator;
-- labeling 3 baris single-expression (NAMA / NIB / L=...m2), satu warna,
+- labeling single-expression (persil biasa NAMA / NIB / L=...m2;
+  persil SHM hanya NIB / No Hak, v0.6.6), satu warna,
   placement OverPoint (v17.13), font adaptif tanpa wrap (v17.11),
   obstacleType=1 (v17.9);
 - nama file PDF PBTF_{batch}_{Lxx}_{skala}_{CITRA|TANPA_CITRA}.pdf;
@@ -41,6 +42,16 @@ Yang DITAMBAH di plugin (tidak ada di desktop v17.15):
   Lembar kecil (< 10 bidang) tidak dinilai (urusannya merge, bukan
   skala). Bukan cap tetap: dataset persil besar yang memang padat di
   1:2500 boleh tetap 1:2500.
+- SHP persil PER LEMBAR + ZIP per lembar (v0.7.2, port PBTK v0.2.3):
+  satu file ZIP per lembar (PBTF_{batch}_{Lxx}_{skala}_persil.zip,
+  berisi 5 komponen SHP), hanya persil lembar itu (tanpa pembagi);
+  file SHP lepas dihapus setelah ZIP terverifikasi.
+- grid peta skala-bergantung opsi B (v0.7.2, port PBTK v0.2.1): jarak
+  garis 100 mm di layout, interval tanah = denominator x 0,1 m,
+  offset per lembar supaya garis lewat titik jangkar (pusat frame —
+  asumsi, tidak ada referensi grid PBT yang bisa diukur; template
+  PBTF_WARDOY.qpt intervalnya 0 sehingga grid tidak ter-render
+  sebelum v0.7.2). Label grid bilangan bulat (annotationPrecision 0).
 """
 
 import math
@@ -60,6 +71,23 @@ MIN_FEATURES_PER_SHEET = 10
 BLOCK_CELL_M = 2.0
 BLOCK_BUFFER_M = 2.0
 TRIM_BUFFER_M = 5.0
+# v0.7.4: toleransi trim pembagi (m). Tepi jalan/sungai yang berjalan
+# tepat di batas persil (offset digitasi beberapa cm) terpotong oleh
+# trim v0.6.9 di tiap sentuhan sudut persil — garis jadi fragmen.
+# Persil dikecilkan TRIM_TOL_M saat menghitung `keep`, jadi garis yang
+# menyentuh/masuk persil sedalam <= TRIM_TOL_M tetap utuh. 0,20 m =
+# 0,8 mm di 1:250 (di bawah ambang terlihat), jauh di bawah X-crossing
+# v0.6.9 yang diperbaiki trim (orde meter).
+TRIM_TOL_M = 0.20
+# v0.7.5: toleransi sambung potongan pembagi (m). Persil jalan/sungai
+# yang dipotong pendek-pendek saat disetorkan terpisah-pisah di GPKG;
+# potongan yang sama jalan (KET sama) bersentuhan persis di sambungannya
+# (jarak cincin 0,000 m, berbagi 2 vertex — diukur TEST-PBT-277 di
+# PBT_2091: sambungan 6-97, 6-117, 97-117, 20-28 semuanya 0,000 m),
+# sedangkan pasangan se-KET terdekat yang BUKAN sambungan berjarak
+# 0,98 m (IRIGASI 20-89) — jadi 0,05 m duduk di celah yang bersih:
+# cukup longgar untuk noise digitasi sub-cm, jauh di bawah 0,98 m.
+MERGE_TOL_M = 0.05
 DEFAULT_MAP_MM = (308.0, 276.0)
 
 ROAD_WORDS = ["jalan", "gang"]
@@ -155,6 +183,121 @@ def label_font_size_pt(denominator):
 
 
 # ---------------------------------------------------------------------------
+# Grid peta skala-bergantung (v0.7.2, opsi B — port dari PBTK v0.2.1)
+# ---------------------------------------------------------------------------
+# Prinsip opsi B (pilihan Derana 2026-11-27): jarak garis di layout
+# TETAP (seperti contoh), interval tanah = denominator x 0,1 m
+# (1:250 -> 25 m ... 1:2500 -> 250 m); offset dihitung PER LEMBAR
+# supaya satu garis lewat titik jangkar; label menampilkan koordinat
+# asli (tidak dibulatkan ke kelipatan 250).
+#
+# JANGKAR PBT (ASUMSI, dinyatakan eksplisit — bukan salinan PBTK):
+# frame PBT 308,594 x 276,749 mm (Map 1 PBTF_WARDOY.qpt, posisi
+# 10.0229, 10.1488 mm). TIDAK ADA referensi grid PBT yang bisa diukur
+# — template intervalX=0/intervalY=0 (grid tidak ter-render; terbukti
+# render lama tanpa label grid) dan tidak ada lembar PBT jadi dengan
+# grid. Jadi jangkar = PUSAT frame (50% lebar, 50% tinggi): garis
+# tengah vertikal 154,30 mm dari tepi kiri, garis tengah horizontal
+# 138,37 mm dari tepi atas. Dengan jarak layout 100 mm, garis jatuh
+# di vertikal [54,30 / 154,30 / 254,30] mm dan horizontal
+# [38,37 / 138,37 / 238,37] mm — 3+3 garis di semua skala, simetris.
+# Bila Derana punya lembar contoh dengan posisi grid yang diinginkan,
+# jangkar ini tinggal diganti angkanya.
+GRID_LAYOUT_SPACING_MM = 100.0
+GRID_ANCHOR_X_MM = 154.30  # garis tengah vertikal, dari tepi kiri frame
+GRID_ANCHOR_Y_MM = 138.37  # garis tengah horizontal, dari tepi atas frame
+
+
+def grid_interval_m(denominator):
+    """Interval grid tanah (meter) opsi B: jarak layout tetap 100 mm,
+    jadi interval = denominator * 0,1 m. 1:250 -> 25 m, 1:500 -> 50 m,
+    1:1000 -> 100 m, 1:1500 -> 150 m, 1:2000 -> 200 m, 1:2500 -> 250 m.
+    None bila denominator tidak valid."""
+    try:
+        d = float(denominator)
+    except (TypeError, ValueError):
+        return None
+    if d <= 0:
+        return None
+    return d * GRID_LAYOUT_SPACING_MM / 1000.0
+
+
+def grid_offsets(extent, map_mm, denominator):
+    """Offset grid (meter) per lembar supaya satu garis lewat titik
+    jangkar layout (GRID_ANCHOR_X_MM dari kiri, GRID_ANCHOR_Y_MM dari
+    atas). extent = [xmin, ymin, xmax, ymax] (meter, CRS peta);
+    map_mm = (lebar, tinggi) frame peta (mm). Mengembalikan
+    (offsetX, offsetY) dalam [0, interval); garis grid di
+    offset + k*interval, jadi satu garis tepat lewat titik jangkar.
+    None bila denominator/extent tidak valid."""
+    interval = grid_interval_m(denominator)
+    if interval is None:
+        return None
+    try:
+        xmin, ymin, xmax, ymax = (float(v) for v in extent)
+        w_mm, h_mm = (float(v) for v in map_mm)
+    except (TypeError, ValueError):
+        return None
+    if w_mm <= 0 or h_mm <= 0 or xmax <= xmin or ymax <= ymin:
+        return None
+    x_anchor = xmin + (GRID_ANCHOR_X_MM / w_mm) * (xmax - xmin)
+    y_anchor = ymax - (GRID_ANCHOR_Y_MM / h_mm) * (ymax - ymin)
+    return (x_anchor % interval, y_anchor % interval)
+
+
+def grid_line_layout_positions(extent, map_mm, denominator):
+    """Posisi garis grid di layout (mm dari tepi kiri/atas frame) untuk
+    satu lembar — dipakai uji murni + verifikasi render: dihitung dari
+    offset (bukan dari QGIS) sehingga posisi yang diharapkan bisa
+    dibandingkan dengan garis yang ter-render. Mengembalikan
+    (xs_mm, ys_mm): posisi garis vertikal (dari kiri) dan horizontal
+    (dari atas) yang jatuh di dalam frame. ([], []) bila tidak valid."""
+    offs = grid_offsets(extent, map_mm, denominator)
+    interval = grid_interval_m(denominator)
+    if offs is None or interval is None:
+        return ([], [])
+    ox, oy = offs
+    xmin, ymin, xmax, ymax = (float(v) for v in extent)
+    w_mm, h_mm = (float(v) for v in map_mm)
+    xs = []
+    k = math.ceil((xmin - ox) / interval - 1e-9)
+    while True:
+        x = ox + k * interval
+        if x > xmax + 1e-9:
+            break
+        xs.append((x - xmin) / (xmax - xmin) * w_mm)
+        k += 1
+    ys = []
+    k = math.ceil((ymin - oy) / interval - 1e-9)
+    while True:
+        y = oy + k * interval
+        if y > ymax + 1e-9:
+            break
+        ys.append((ymax - y) / (ymax - ymin) * h_mm)
+        k += 1
+    return (xs, ys)
+
+
+def _attr_str(value):
+    """Nilai atribut fitur -> str; NULL -> "".
+
+    QGIS 3.22 (OGR) mengembalikan NULL sebagai QVariant null, BUKAN
+    Python None — `v is None` saja TIDAK cukup: str(QVariant null)
+    = "NULL" (truthy). Dipakai di kode BARU yang membaca atribut
+    (ekspor SHP v0.7.2); JANGAN dipakai untuk mengubah perilaku
+    label_len_of/val() lama (bug QVariant-null itu di luar scope
+    v0.7.2, menunggu keputusan Derana)."""
+    if value is None:
+        return ""
+    try:
+        if value.isNull():
+            return ""
+    except AttributeError:
+        pass
+    return str(value)
+
+
+# ---------------------------------------------------------------------------
 # Kecocokan label (mode Auto campuran, v0.6.0)
 # ---------------------------------------------------------------------------
 # Label 3 baris (NAMA / NIB / L=...m2) dirender dengan font
@@ -171,11 +314,12 @@ LABEL_LINE_HEIGHT_FACTOR = 1.2
 
 
 def label_fits(parcel, denominator):
-    """True bila label 3 baris persil muat di dalam bbox persil di kertas
-    pada skala `denominator`."""
+    """True bila label persil muat di dalam bbox persil di kertas
+    pada skala `denominator`. Tinggi label = label_lines baris
+    (v0.6.6: 3 biasa, 2 SHM)."""
     font_pt = label_font_size_pt(denominator)
     label_w_mm = parcel.label_len * LABEL_CHAR_WIDTH_FACTOR * font_pt * PT_TO_MM
-    label_h_mm = 3 * font_pt * LABEL_LINE_HEIGHT_FACTOR * PT_TO_MM
+    label_h_mm = parcel.label_lines * font_pt * LABEL_LINE_HEIGHT_FACTOR * PT_TO_MM
     paper_w_mm = (parcel.bbox[2] - parcel.bbox[0]) / denominator * 1000.0
     paper_h_mm = (parcel.bbox[3] - parcel.bbox[1]) / denominator * 1000.0
     return (
@@ -649,16 +793,21 @@ def _auto_accs(parcels, dividers, map_mm):
 
 
 def parcel_color_rgb(name):
-    """Palet bernama — sama dengan parcel_color_rgb() di Rust."""
+    """Palet bernama — sama dengan parcel_color_rgb() di Rust.
+
+    Warna core (v0.6.5, kode dari Derana 2026-11-26): Ungu FE01AE,
+    Hijau 00FB00, Merah FD0000."""
     key = (name or "").strip().lower()
     table = {
         "putih": (255, 255, 255),
         "white": (255, 255, 255),
-        "merah": (228, 26, 28),
-        "red": (228, 26, 28),
-        "ungu": (255, 0, 255),
-        "magenta": (255, 0, 255),
-        "purple": (255, 0, 255),
+        "merah": (253, 0, 0),
+        "red": (253, 0, 0),
+        "ungu": (254, 1, 174),
+        "magenta": (254, 1, 174),
+        "purple": (254, 1, 174),
+        "hijau": (0, 251, 0),
+        "green": (0, 251, 0),
         "biru": (0, 112, 192),
         "blue": (0, 112, 192),
         "kuning": (255, 192, 0),
@@ -673,7 +822,7 @@ def parcel_color_rgb(name):
         "dark-grey": (35, 35, 35),
         "darkgrey": (35, 35, 35),
     }
-    return table.get(key, (0, 176, 80))  # hijau = default
+    return table.get(key, (0, 251, 0))  # hijau = default
 
 
 def text_color_rgb(name):
@@ -690,19 +839,30 @@ def text_color_rgb(name):
 class FeatureBox:
     """Satu fitur: id (pk sebagai string), bbox, cincin poligon, KET.
 
-    label_len = panjang (karakter) baris label terpanjang (NAMA / NIB /
-    L=...m2) — dipakai mode Auto campuran v0.6.0 untuk menentukan skala
-    terbesar yang labelnya masih muat. 0 = tidak diketahui (dianggap
-    muat di semua skala)."""
+    label_len = panjang (karakter) baris label terpanjang (persil biasa
+    NAMA / NIB / L=...m2; persil SHM NIB / No Hak) — dipakai mode Auto
+    campuran v0.6.0 untuk menentukan skala terbesar yang labelnya
+    masih muat. 0 = tidak diketahui (dianggap muat di semua skala).
 
-    __slots__ = ("id", "bbox", "rings", "ket", "label_len")
+    label_lines = jumlah baris label (v0.6.6): 3 untuk persil biasa,
+    2 untuk persil SHM (NIB + No Hak). Dipakai label_fits untuk
+    tinggi label. Default 3 (perilaku lama).
 
-    def __init__(self, fid, bbox, rings, ket, label_len=0):
+    lines = polylines TERBUKA (pembagi garis dari layer 'dividers',
+    v0.6.4): daftar garis, tiap garis daftar titik (x, y). Dipakai
+    detect_blocks lewat point_lines_dist (tanpa segmen penutup)."""
+
+    __slots__ = ("id", "bbox", "rings", "ket", "label_len", "label_lines", "lines")
+
+    def __init__(self, fid, bbox, rings, ket, label_len=0, lines=None,
+                 label_lines=3):
         self.id = str(fid)
         self.bbox = list(bbox)
         self.rings = rings
         self.ket = ket
         self.label_len = int(label_len) if label_len else 0
+        self.label_lines = int(label_lines) if label_lines else 3
+        self.lines = [list(ln) for ln in lines] if lines else []
 
     def center(self):
         return (
@@ -762,6 +922,24 @@ def point_seg_dist(x, y, ax, ay, bx, by):
         return math.hypot(x - ax, y - ay)
     t = max(0.0, min(1.0, ((x - ax) * dx + (y - ay) * dy) / l2))
     return math.hypot(x - (ax + t * dx), y - (ay + t * dy))
+
+
+def point_lines_dist(x, y, lines):
+    """Jarak terdekat ke polylines TERBUKA (tanpa segmen penutup).
+
+    Berbeda dengan point_rings_dist yang menutup cincin (segmen
+    terakhir -> titik pertama): garis pembagi (jalan/sungai dari layer
+    dividers) tidak punya sisi penutup, jadi jarak dihitung hanya ke
+    segmen yang benar-benar ada."""
+    best = math.inf
+    for line in lines:
+        for i in range(len(line) - 1):
+            ax, ay = line[i]
+            bx, by = line[i + 1]
+            d = point_seg_dist(x, y, ax, ay, bx, by)
+            if d < best:
+                best = d
+    return best
 
 
 def point_rings_dist(x, y, rings):
@@ -830,6 +1008,8 @@ def detect_blocks(parcels, dividers):
                     cx, cy = cell_center(ix, iy)
                     if point_rings_contains(cx, cy, d.rings) or point_rings_dist(
                         cx, cy, d.rings
+                    ) <= BLOCK_BUFFER_M or point_lines_dist(
+                        cx, cy, d.lines
                     ) <= BLOCK_BUFFER_M:
                         blocked[idx] = True
 
@@ -1088,8 +1268,8 @@ def group_feature_boxes(features, requested_scale, map_mm):
         features,
         key=lambda f: (-f.center()[1], f.center()[0], f.id),
     )
-    parcels = [f for f in features if not (is_special_ket(f.ket) and f.rings)]
-    dividers = [f for f in features if is_special_ket(f.ket) and f.rings]
+    parcels = [f for f in features if not (is_special_ket(f.ket) and (f.rings or f.lines))]
+    dividers = [f for f in features if is_special_ket(f.ket) and (f.rings or f.lines)]
     if not parcels:
         raise ValueError("Tidak ada fitur untuk dikelompokkan.")
     if requested_scale == "Auto":
@@ -1149,7 +1329,7 @@ def _qgis_enum(*candidates, fallback=None):
             for part in rest.split("."):
                 obj = getattr(obj, part)
             return obj
-        except AttributeError:
+        except AttributeError:  # nosec B112  # kandidat berikut dicoba
             continue
     return fallback
 
@@ -1160,24 +1340,52 @@ def _qgis_color(rgb):
     return QColor(rgb[0], rgb[1], rgb[2], 255)
 
 
+def _rgb_hex(rgb):
+    """(r, g, b) -> '#RRGGBB' (huruf besar) — untuk ekspresi warna
+    data-defined QGIS (label Color menerima string hex)."""
+    return "#{:02X}{:02X}{:02X}".format(
+        int(rgb[0]), int(rgb[1]), int(rgb[2]))
+
+
+def shm_label_color_expression(fields, shm_rgb, text_rgb):
+    """Ekspresi warna label data-defined (v0.7.3, murni — tanpa QGIS).
+
+    Persil SHM (field 080203 terisi, Nomor Hak) memakai warna "Warna
+    SHM" (shm_rgb — sama dengan warna garis SHM), persil biasa memakai
+    warna "Warna teks" (text_rgb). Mengembalikan None bila field 080203
+    tidak ada ATAU shm_rgb None — pemanggil lalu memakai warna dasar
+    fmt.setColor(text_rgb) untuk semua label (perilaku lama).
+    Kondisi SHM sama dengan cabang SHM di label_expression
+    (coalesce 080203 != '')."""
+    if shm_rgb is None:
+        return None
+    hak = next((f for f in fields if f.lower() == "080203"), None)
+    if not hak:
+        return None
+    return (
+        "CASE WHEN coalesce(\"{}\", '') != '' "
+        "THEN '{}' ELSE '{}' END"
+    ).format(hak, _rgb_hex(shm_rgb), _rgb_hex(text_rgb))
+
+
 def ket_ilike_expr(ket_field, keywords):
     k = 'coalesce("{}", \'\')'.format(ket_field)
     return " OR ".join("{} ILIKE '%{}%'".format(k, w) for w in keywords)
 
 
-def trim_expression(ket_field):
-    road = ket_ilike_expr(ket_field, ROAD_WORDS)
-    water = ket_ilike_expr(ket_field, WATER_WORDS)
-    return (
-        "intersection($geometry, buffer(aggregate(@layer_id, 'collect', "
-        "$geometry, filter:= NOT (({}) OR ({}))), {}))".format(
-            road, water, TRIM_BUFFER_M
-        )
-    )
+# trim_expression DIHAPUS di v0.6.7: geometry generator untuk pembagi
+# poligon sudah tidak dipakai — trim pembagi kini di Python
+# (_trimmed_divider_layers), supaya jalur PDF dan Preview/.qgs sama.
 
 
 def label_expression(fields):
-    """Ekspresi label 3 baris — sama persis dengan default_labeling Rust."""
+    """Ekspresi label — sama persis dengan default_labeling Rust.
+
+    Persil biasa: NAMA / NIB (080201) / L=...m2 (3 baris; fitur
+    spesial jalan/sungai hanya NAMA). Persil SHM (v0.6.6, keputusan
+    Derana 2026-11-26: "untuk Persil SHM hanya perlu NIB dan No
+    Haknya saja"): hanya NIB + No Hak (080203), 2 baris — tanpa NAMA,
+    tanpa LUAS, tanpa No SU. array_filter membuang baris kosong."""
     by_lower = {f.lower(): f for f in fields}
 
     def find(wanted):
@@ -1189,6 +1397,7 @@ def label_expression(fields):
         special = "({}) OR ({})".format(
             ket_ilike_expr(ket, ROAD_WORDS), ket_ilike_expr(ket, WATER_WORDS)
         )
+    # Baris persil biasa: NAMA / NIB / L=...m2.
     lines = []
     nama = find("NAMA")
     if nama:
@@ -1223,16 +1432,77 @@ def label_expression(fields):
                 "case {}when {} is null or {} = '' then '' else "
                 "concat('L=', {}, 'm2') end".format(guard, f, f, f)
             )
-    if not lines:
-        return None
-    return "array_to_string(array_filter(array({}), @element != ''), '\\n')".format(
-        ", ".join(lines)
-    )
+    ordinary = None
+    if lines:
+        ordinary = "array_to_string(array_filter(array({}), @element != ''), '\\n')".format(
+            ", ".join(lines)
+        )
+    # Persil SHM (v0.6.6): hanya NIB + No Hak (080203).
+    hak = find("080203")
+    if hak:
+        shm_lines = []
+        if nib:
+            shm_lines.append('coalesce("{}", \'\')'.format(nib))
+        shm_lines.append('coalesce("{}", \'\')'.format(hak))
+        shm = "array_to_string(array_filter(array({}), @element != ''), '\\n')".format(
+            ", ".join(shm_lines)
+        )
+        if ordinary:
+            return "case when coalesce(\"{}\", '') != '' then {} else {} end".format(
+                hak, shm, ordinary
+            )
+        return shm
+    return ordinary
 
 
-def apply_parcel_style(layer, outline_rgb, text_rgb, fields, denominator):
+def _style_kwargs(opts):
+    """Kwargs gaya dari opts panel (v0.6.4): lebar garis per jenis,
+    warna SHM, buffer teks. Default = perilaku lama."""
+    try:
+        parcel_w = float(opts.get("parcel_width_mm") or 0.5)
+    except (TypeError, ValueError):
+        parcel_w = 0.5
+    try:
+        road_w = float(opts.get("road_width_mm") or 0.5)
+    except (TypeError, ValueError):
+        road_w = 0.5
+    try:
+        water_w = float(opts.get("water_width_mm") or 0.5)
+    except (TypeError, ValueError):
+        water_w = 0.5
+    try:
+        shm_w = float(opts.get("shm_width_mm") or 0.5)
+    except (TypeError, ValueError):
+        shm_w = 0.5
+    shm_color = opts.get("shm_color")
+    return {
+        "parcel_width_mm": parcel_w,
+        "road_width_mm": road_w,
+        "water_width_mm": water_w,
+        "shm_rgb": parcel_color_rgb(shm_color) if shm_color else None,
+        "shm_width_mm": shm_w,
+        "text_buffer": bool(opts.get("text_buffer", False)),
+    }
+
+
+def apply_parcel_style(layer, outline_rgb, text_rgb, fields, denominator,
+                       parcel_width_mm=0.5, road_width_mm=0.5,
+                       water_width_mm=0.5, shm_rgb=None, shm_width_mm=0.5,
+                       text_buffer=False):
     """Terapkan renderer aturan + labeling ke QgsVectorLayer (port
-    build_project_xml: rule_renderer_polygon + default_labeling)."""
+    build_project_xml: rule_renderer_polygon + default_labeling).
+
+    v0.6.4: lebar garis per jenis (persil/jalan/sungai/SHM), rule SHM
+    (field 080203 terisi -> warna SHM + lebar SHM, sebelum rule ELSE),
+    dan buffer teks (halo putih 0,5 mm) bila text_buffer True. Semua
+    kwarg baru punya default = perilaku lama, jadi pemanggil lama
+    (termasuk test) tidak berubah.
+
+    v0.6.7: rule jalan/sungai (geometry generator) dihapus dari sini —
+    pembagi poligon digambar dari layer memori _trimmed_divider_layers
+    (cincin dibuka jadi garis terbuka). road_width_mm/water_width_mm
+    kini hanya diteruskan ke layer pembagi itu; di sini tidak dipakai
+    lagi (dipertahankan di signature supaya pemanggil lama tetap jalan)."""
     from qgis.core import (
         QgsFillSymbol,
         QgsPalLayerSettings,
@@ -1253,40 +1523,18 @@ def apply_parcel_style(layer, outline_rgb, text_rgb, fields, denominator):
     ket_field = next((f for f in fields if f.lower() == "ket"), None)
 
     if is_polygon and ket_field:
-        road = ket_ilike_expr(ket_field, ROAD_WORDS)
-        water = ket_ilike_expr(ket_field, WATER_WORDS)
-        trim = trim_expression(ket_field)
-
-        def gen_symbol(rgb):
-            from qgis.core import QgsGeometryGeneratorSymbolLayer
-
-            gen = QgsGeometryGeneratorSymbolLayer.create(
-                {
-                    "SymbolType": "Fill",
-                    "geometryModifier": trim,
-                    "units": "MapUnit",
-                }
-            )
-            sub = QgsFillSymbol.createSimple(
-                {
-                    "color": "255,255,255,0",
-                    "outline_color": "{},{},{},255".format(*rgb),
-                    "outline_width": "0.5",
-                    "outline_width_unit": "MM",
-                    "outline_style": "solid",
-                }
-            )
-            gen.setSubSymbol(sub)
-            symbol = QgsFillSymbol()
-            symbol.changeSymbolLayer(0, gen)
-            return symbol
-
-        def parcel_symbol(rgb):
+        # v0.6.7: rule jalan/sungai (geometry generator) DIHAPUS —
+        # pembagi poligon kini digambar dari layer memori hasil
+        # _trimmed_divider_layers (cincin dibuka jadi garis terbuka),
+        # supaya jalur PDF dan Preview/.qgs konsisten. Persil spesial
+        # tidak lagi masuk subset layer ini, jadi rule ELSE di bawah
+        # tidak pernah melihatnya.
+        def parcel_symbol(rgb, width_mm):
             return QgsFillSymbol.createSimple(
                 {
                     "color": "255,255,255,0",
                     "outline_color": "{},{},{},255".format(*rgb),
-                    "outline_width": "0.5",
+                    "outline_width": str(width_mm),
                     "outline_width_unit": "MM",
                     "outline_style": "solid",
                 }
@@ -1310,11 +1558,18 @@ def apply_parcel_style(layer, outline_rgb, text_rgb, fields, denominator):
             rule.setLabel(label)
             return rule
 
-        root.appendChild(make_rule(gen_symbol((255, 63, 0)), road, "Jalan / Gang"))
-        root.appendChild(
-            make_rule(gen_symbol((0, 63, 255)), water, "Sungai / Irigasi / Saluran")
-        )
-        else_rule = QgsRuleBasedRenderer.Rule(parcel_symbol(outline_rgb))
+        # (Rule jalan/sungai geometry-generator dihapus di v0.6.7 —
+        # pembagi digambar dari layer memori _trimmed_divider_layers.)
+        # SHM (v0.6.4): field 080203 terisi (Nomor Hak M.00xxx) ->
+        # warna + lebar SHM sendiri. Rule ini SEBELUM rule ELSE, jadi
+        # persil SHM tidak ikut rule ELSE (ELSE = tidak cocok rule lain).
+        shm_field = next((f for f in fields if f.lower() == "080203"), None)
+        if shm_rgb is not None and shm_field:
+            shm_filter = '"{}" IS NOT NULL AND "{}" <> \'\''.format(shm_field, shm_field)
+            root.appendChild(
+                make_rule(parcel_symbol(shm_rgb, shm_width_mm), shm_filter, "SHM")
+            )
+        else_rule = QgsRuleBasedRenderer.Rule(parcel_symbol(outline_rgb, parcel_width_mm))
         else_rule.setLabel("Bidang Tanah")
         # Jadikan rule ELSE: di QGIS 3.22 tidak ada setElse() —
         # setFilterExpression("ELSE") adalah cara kanonisnya (sama seperti
@@ -1323,16 +1578,51 @@ def apply_parcel_style(layer, outline_rgb, text_rgb, fields, denominator):
         root.appendChild(else_rule)
         layer.setRenderer(renderer)
     else:
-        symbol = QgsFillSymbol.createSimple(
-            {
-                "color": "255,255,255,0",
-                "outline_color": "{},{},{},255".format(*outline_rgb),
-                "outline_width": "0.5",
-                "outline_width_unit": "MM",
-                "outline_style": "solid",
-            }
-        )
-        layer.setRenderer(QgsSingleSymbolRenderer(symbol))
+        # Tanpa KET tidak ada rule jalan/sungai; bila ada field SHM dan
+        # warna SHM diminta, pakai 2 rule (SHM + ELSE) supaya SHM tetap
+        # beda warna — kalau tidak, satu simbol dengan lebar persil.
+        shm_field = next((f for f in fields if f.lower() == "080203"), None)
+        if is_polygon and shm_rgb is not None and shm_field:
+            renderer = QgsRuleBasedRenderer(QgsFillSymbol())
+            root = renderer.rootRule()
+            if root.children():
+                root.removeChildAt(0)
+
+            def make_rule2(symbol, filter_exp, label):
+                rule = QgsRuleBasedRenderer.Rule(symbol)
+                rule.setFilterExpression(filter_exp)
+                rule.setLabel(label)
+                return rule
+
+            def parcel_symbol2(rgb, width_mm):
+                return QgsFillSymbol.createSimple(
+                    {
+                        "color": "255,255,255,0",
+                        "outline_color": "{},{},{},255".format(*rgb),
+                        "outline_width": str(width_mm),
+                        "outline_width_unit": "MM",
+                        "outline_style": "solid",
+                    }
+                )
+
+            shm_filter = '"{}" IS NOT NULL AND "{}" <> \'\''.format(shm_field, shm_field)
+            root.appendChild(make_rule2(parcel_symbol2(shm_rgb, shm_width_mm), shm_filter, "SHM"))
+            else_rule = QgsRuleBasedRenderer.Rule(parcel_symbol2(outline_rgb, parcel_width_mm))
+            else_rule.setFilterExpression("ELSE")
+            else_rule.setLabel("Bidang Tanah")
+            root.appendChild(else_rule)
+            layer.setRenderer(renderer)
+        else:
+            symbol = QgsFillSymbol.createSimple(
+                {
+                    "color": "255,255,255,0",
+                    "outline_color": "{},{},{},255".format(*outline_rgb),
+                    "outline_width": str(parcel_width_mm),
+                    "outline_width_unit": "MM",
+                    "outline_style": "solid",
+                }
+            )
+            layer.setRenderer(QgsSingleSymbolRenderer(symbol))
 
     if is_polygon:
         expr = label_expression(fields)
@@ -1360,6 +1650,22 @@ def apply_parcel_style(layer, outline_rgb, text_rgb, fields, denominator):
                 fmt.setSize(size)
                 fmt.setSizeUnit(QgsUnitTypes.RenderUnit.RenderPoints)
                 fmt.setColor(_qgis_color(text_rgb))
+                # Buffer teks (v0.6.4, ukuran 0,5 mm sejak v0.7.1):
+                # halo putih 0,5 mm di sekeliling semua baris label,
+                # bila opsi panel menyala. Default mati = perilaku lama
+                # (tanpa buffer).
+                if text_buffer:
+                    try:
+                        from qgis.core import QgsTextBufferSettings
+
+                        buf = QgsTextBufferSettings()
+                        buf.setEnabled(True)
+                        buf.setSize(0.5)
+                        buf.setSizeUnit(QgsUnitTypes.RenderUnit.RenderMillimeters)
+                        buf.setColor(_qgis_color((255, 255, 255)))
+                        fmt.setBuffer(buf)
+                    except Exception:  # nosec B110  # best-effort
+                        pass
                 settings.setFormat(fmt)
             except Exception:  # nosec B110  # best-effort: kegagalan opsional diabaikan
                 pass
@@ -1455,6 +1761,34 @@ def apply_parcel_style(layer, outline_rgb, text_rgb, fields, denominator):
                     props = settings.dataDefinedProperties()
                     props.setProperty(size_key, QgsProperty.fromExpression(dd))
                     settings.setDataDefinedProperties(props)
+            # Warna label data-defined (v0.7.3): persil SHM memakai warna
+            # "Warna SHM" (shm_rgb — sama dengan warna garis SHM), persil
+            # biasa memakai warna "Warna teks" (text_rgb). Tanpa ini semua
+            # label satu warna tetap — laporan Derana 2026-11-27: teks SHM
+            # tetap putih saat "Warna teks" = Putih (supaya terbaca di
+            # varian CITRA/foto). Pola setProperty sama seperti
+            # data-defined Size di atas (koleksi -> set -> kembalikan).
+            # Guard: hanya bila field 080203 ada DAN shm_rgb diberikan
+            # (shm_label_color_expression -> None bila tidak); bila
+            # tidak, semua label pakai text_rgb seperti sebelumnya —
+            # fmt.setColor(text_rgb) di atas tetap sebagai warna
+            # dasar/fallback.
+            color_expr = shm_label_color_expression(fields, shm_rgb, text_rgb)
+            if color_expr is not None:
+                try:
+                    color_key = _qgis_enum(
+                        "QgsPalLayerSettings.Property.Color",
+                        "QgsPalLayerSettings.Color",
+                        fallback=None,
+                    )
+                    if color_key is not None:
+                        props = settings.dataDefinedProperties()
+                        props.setProperty(
+                            color_key, QgsProperty.fromExpression(color_expr)
+                        )
+                        settings.setDataDefinedProperties(props)
+                except Exception:  # nosec B110  # best-effort
+                    pass
             # Rotasi label (v0.4.1, DICOBA lalu DIBATALKAN): properti
             # data-defined Rotation (main_angle, mengikuti sumbu panjang
             # persil) terpasang dan berevaluasi benar, TAPI diabaikan
@@ -1480,16 +1814,16 @@ def _as_multipolygon(geom):
 
     if geom is None or geom.isEmpty():
         return None
-    if geom.wkbType() == QgsWkbTypes.Polygon:
+    if geom.wkbType() == QgsWkbTypes.Type.Polygon:
         return QgsGeometry.fromMultiPolygonXY([geom.asPolygon()])
-    if geom.wkbType() == QgsWkbTypes.MultiPolygon:
+    if geom.wkbType() == QgsWkbTypes.Type.MultiPolygon:
         return QgsGeometry(geom)
-    if geom.wkbType() == QgsWkbTypes.GeometryCollection:
+    if geom.wkbType() == QgsWkbTypes.Type.GeometryCollection:
         polys = []
         for part in geom.asGeometryCollection():
-            if part.wkbType() == QgsWkbTypes.Polygon:
+            if part.wkbType() == QgsWkbTypes.Type.Polygon:
                 polys.append(part.asPolygon())
-            elif part.wkbType() == QgsWkbTypes.MultiPolygon:
+            elif part.wkbType() == QgsWkbTypes.Type.MultiPolygon:
                 polys.extend(part.asMultiPolygon())
         if not polys:
             return None
@@ -1497,24 +1831,53 @@ def _as_multipolygon(geom):
     return None
 
 
-def _apply_divider_style(layer):
+def _as_multilinestring(geom):
+    """Kembalikan geometri sebagai MultiLineString (atau None).
+
+    intersection() pembagi garis dengan buffer bisa menghasilkan
+    LineString, MultiLineString, atau GeometryCollection — layer
+    memori pembagi garis bertipe MultiLineString, jadi semua bagian
+    garis disatukan ke bentuk itu."""
+    from qgis.core import QgsGeometry, QgsWkbTypes
+
+    if geom is None or geom.isEmpty():
+        return None
+    if geom.wkbType() == QgsWkbTypes.Type.LineString:
+        return QgsGeometry.fromMultiPolylineXY([geom.asPolyline()])
+    if geom.wkbType() == QgsWkbTypes.Type.MultiLineString:
+        return QgsGeometry(geom)
+    if geom.wkbType() == QgsWkbTypes.Type.GeometryCollection:
+        lines = []
+        for part in geom.asGeometryCollection():
+            if part.wkbType() == QgsWkbTypes.Type.LineString:
+                lines.append(part.asPolyline())
+            elif part.wkbType() == QgsWkbTypes.Type.MultiLineString:
+                lines.extend(part.asMultiPolyline())
+        if not lines:
+            return None
+        return QgsGeometry.fromMultiPolylineXY(lines)
+    return None
+
+
+def _apply_divider_style(layer, road_width_mm=0.5, water_width_mm=0.5):
     """Renderer aturan POLOS untuk layer pembagi (tanpa geometry generator).
 
     Warna sama dengan apply_parcel_style (jalan oranye #FF3F00, air
     biru #003FFF, outline 0,5 mm, isi transparan) — hanya saja tanpa
     trim_expression, karena geometri di layer ini SUDAH di-trim di Python
-    (lihat _trimmed_divider_layer)."""
+    (lihat _trimmed_divider_layers). Lebar outline mengikuti opsi panel
+    (v0.6.4)."""
     from qgis.core import QgsFillSymbol, QgsRuleBasedRenderer
 
     road = ket_ilike_expr("KET", ROAD_WORDS)
     water = ket_ilike_expr("KET", WATER_WORDS)
 
-    def sym(rgb):
+    def sym(rgb, width_mm):
         return QgsFillSymbol.createSimple(
             {
                 "color": "255,255,255,0",
                 "outline_color": "{},{},{},255".format(*rgb),
-                "outline_width": "0.5",
+                "outline_width": str(width_mm),
                 "outline_width_unit": "MM",
                 "outline_style": "solid",
             }
@@ -1531,12 +1894,345 @@ def _apply_divider_style(layer):
         r.setLabel(label)
         return r
 
-    root.appendChild(rule(sym((255, 63, 0)), road, "Jalan / Gang"))
-    root.appendChild(rule(sym((0, 63, 255)), water, "Sungai / Irigasi / Saluran"))
+    root.appendChild(rule(sym((255, 63, 0), road_width_mm), road, "Jalan / Gang"))
+    root.appendChild(rule(sym((0, 63, 255), water_width_mm), water, "Sungai / Irigasi / Saluran"))
     layer.setRenderer(renderer)
 
 
-def _trimmed_divider_layer(dividers, group, geom_by_pk, crs, layer_name):
+def _apply_divider_line_style(layer, road_width_mm=0.5, water_width_mm=0.5):
+    """Renderer aturan GARIS untuk layer pembagi garis (v0.6.4, tanpa
+    geometry generator — geometri SUDAH di-trim di Python).
+
+    Jalan oranye #FF3F00, air biru #003FFF, lebar dari opsi panel."""
+    from qgis.core import QgsLineSymbol, QgsRuleBasedRenderer
+
+    road = ket_ilike_expr("KET", ROAD_WORDS)
+    water = ket_ilike_expr("KET", WATER_WORDS)
+
+    def sym(rgb, width_mm):
+        return QgsLineSymbol.createSimple(
+            {
+                "color": "{},{},{},255".format(*rgb),
+                "width": str(width_mm),
+                "width_unit": "MM",
+            }
+        )
+
+    renderer = QgsRuleBasedRenderer(QgsLineSymbol())
+    root = renderer.rootRule()
+    if root.children():
+        root.removeChildAt(0)
+
+    def rule(symbol, filter_exp, label):
+        r = QgsRuleBasedRenderer.Rule(symbol)
+        r.setFilterExpression(filter_exp)
+        r.setLabel(label)
+        return r
+
+    root.appendChild(rule(sym((255, 63, 0), road_width_mm), road, "Jalan / Gang"))
+    root.appendChild(rule(sym((0, 63, 255), water_width_mm), water, "Sungai / Irigasi / Saluran"))
+    layer.setRenderer(renderer)
+
+
+def _open_ring(pts):
+    """Buka satu cincin tertutup (jalan/sungai poligon) jadi 2 garis
+    terbuka, dengan membuang 2 segmen 'tutup ujung' (cap).
+
+    Cincin jalan/sungai adalah strip panjang-tipis: 2 sisi panjang +
+    2 tutup pendek di ujungnya (yang ditandai X oleh Derana di
+    screenshot 2026-11-26). Tutup = 2 segmen terpendek yang TIDAK
+    bersebelahan, masing-masing < 20% keliling cincin, DAN berbelok
+    tajam (> 30 derajat) di kedua ujungnya — syarat belok ini
+    membedakan tutup dari jog pendek di tengah sisi (yang lurus,
+    belok ~0 derajat). Bila tidak ada 2 segmen yang memenuhi (bukan
+    strip — mis. persimpangan jalan yang hampir persegi), kembalikan
+    None: cincin tetap tertutup (perilaku lama). `pts` = daftar
+    (x, y), titik pertama == terakhir (toleransi 1e-6 m).
+
+    v0.7.4 (loop buntu, Derana 2026-11-27: "garis tutup seperti itu
+    kan logikanya jalan/gang tersebut di tutup di lapangan"): strip
+    yang MELIPAT (jalan buntu / gang buntu) punya hairpin — belokan
+    tajam di tengah strip dengan segmen jog yang sangat pendek. Kriteria
+    "terpendek + belok tajam" salah memilih jog hairpin itu sebagai
+    tutup, sehingga loop putus di tengah jalan (bukan di ujung).
+    Pengaman: bila satu garis hasil bukaan jauh lebih pendek dari
+    yang lain (< 1/3), bukaan itu salah — cincin tetap tertutup
+    supaya loop buntu utuh. Strip lurus (2 sisi panjang sebanding,
+    mis. JALAN fid 16: 113 m vs 287 m) tetap dibuka seperti v0.6.7.
+    Mengembalikan [polyline, polyline] atau None."""
+    if len(pts) < 5:
+        return None
+    if math.hypot(pts[0][0] - pts[-1][0], pts[0][1] - pts[-1][1]) > 1e-6:
+        return None
+    ring = pts[:-1]
+    n = len(ring)
+    if n < 4:
+        return None
+    seg_len = []
+    for i in range(n):
+        a = ring[i]
+        b = ring[(i + 1) % n]
+        seg_len.append(math.hypot(b[0] - a[0], b[1] - a[1]))
+    perim = sum(seg_len)
+    if perim <= 0:
+        return None
+
+    def turn_deg(j):
+        # Sudut belok di titik ring[j] (derajat): 0 = lurus, 90 = siku.
+        a = ring[(j - 1) % n]
+        b = ring[j]
+        c = ring[(j + 1) % n]
+        ux, uy = b[0] - a[0], b[1] - a[1]
+        vx, vy = c[0] - b[0], c[1] - b[1]
+        lu = math.hypot(ux, uy)
+        lv = math.hypot(vx, vy)
+        if lu == 0 or lv == 0:
+            return 0.0
+        cosang = (ux * vx + uy * vy) / (lu * lv)
+        cosang = max(-1.0, min(1.0, cosang))
+        return math.degrees(math.acos(cosang))
+
+    turns = [turn_deg(j) for j in range(n)]
+    # Kandidat tutup: pendek + belok tajam di kedua ujung.
+    candidates = [
+        i for i in range(n)
+        if seg_len[i] < 0.20 * perim
+        and turns[i] > 30.0
+        and turns[(i + 1) % n] > 30.0
+    ]
+    if len(candidates) < 2:
+        return None
+    candidates.sort(key=lambda i: seg_len[i])
+    cap1 = candidates[0]
+
+    def adjacent(i, j):
+        return abs(i - j) == 1 or {i, j} == {0, n - 1}
+
+    cap2 = None
+    for j in candidates[1:]:
+        if not adjacent(cap1, j):
+            cap2 = j
+            break
+    if cap2 is None:
+        return None
+    caps = {cap1, cap2}
+    lines = []
+    cur = None
+    for i in range(n):
+        if i in caps:
+            if cur is not None:
+                lines.append(cur)
+                cur = None
+            continue
+        a = ring[i]
+        b = ring[(i + 1) % n]
+        if cur is None:
+            cur = [a, b]
+        else:
+            cur.append(b)
+    if cur is not None:
+        lines.append(cur)
+    # Rantai pertama + terakhir menyambung lewat titik awal cincin
+    # (cincin itu melingkar) — gabung bila ujungnya bertemu.
+    if len(lines) >= 2 and lines[-1][-1] == lines[0][0]:
+        lines = [lines[-1] + lines[0][1:]] + lines[1:-1]
+    lines = [ln for ln in lines if len(ln) >= 2]
+    if len(lines) == 2:
+        # v0.7.4: pengaman loop buntu — bila satu garis hasil bukaan
+        # jauh lebih pendek dari yang lain (< 1/3), cap yang dibuang
+        # bukan tutup ujung melainkan jog hairpin; kembalikan None
+        # (cincin tetap tertutup, loop utuh).
+        def _plen(ln):
+            return sum(math.hypot(ln[i + 1][0] - ln[i][0],
+                                  ln[i + 1][1] - ln[i][1])
+                       for i in range(len(ln) - 1))
+        l0, l1 = _plen(lines[0]), _plen(lines[1])
+        if l0 > 0 and l1 > 0 and min(l0, l1) < (1.0 / 3.0) * max(l0, l1):
+            return None
+    return lines if len(lines) == 2 else None
+
+
+def _pt_seg_dist(px, py, ax, ay, bx, by):
+    """Jarak titik (px, py) ke segmen ab (m)."""
+    dx, dy = bx - ax, by - ay
+    l2 = dx * dx + dy * dy
+    if l2 == 0:
+        return math.hypot(px - ax, py - ay)
+    t = max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / l2))
+    return math.hypot(px - (ax + t * dx), py - (ay + t * dy))
+
+
+def _seg_intersect(a, b, c, d):
+    """Apakah segmen ab memotong segmen cd (termasuk bersentuhan)?"""
+
+    def orient(p, q, r):
+        v = (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0])
+        if abs(v) < 1e-12:
+            return 0
+        return 1 if v > 0 else -1
+
+    def on_seg(p, q, r):
+        return (min(p[0], r[0]) - 1e-9 <= q[0] <= max(p[0], r[0]) + 1e-9
+                and min(p[1], r[1]) - 1e-9 <= q[1]
+                <= max(p[1], r[1]) + 1e-9)
+
+    o1, o2, o3, o4 = (orient(a, b, c), orient(a, b, d),
+                      orient(c, d, a), orient(c, d, b))
+    if o1 != o2 and o3 != o4:
+        return True
+    if o1 == 0 and on_seg(a, c, b):
+        return True
+    if o2 == 0 and on_seg(a, d, b):
+        return True
+    if o3 == 0 and on_seg(c, a, d):
+        return True
+    if o4 == 0 and on_seg(c, b, d):
+        return True
+    return False
+
+
+def _seg_seg_dist(a, b, c, d):
+    """Jarak minimum antara segmen ab dan cd (m); 0 bila bersentuhan."""
+    if _seg_intersect(a, b, c, d):
+        return 0.0
+    return min(
+        _pt_seg_dist(a[0], a[1], c[0], c[1], d[0], d[1]),
+        _pt_seg_dist(b[0], b[1], c[0], c[1], d[0], d[1]),
+        _pt_seg_dist(c[0], c[1], a[0], a[1], b[0], b[1]),
+        _pt_seg_dist(d[0], d[1], a[0], a[1], b[0], b[1]),
+    )
+
+
+def _rings_min_dist(rings_a, rings_b):
+    """Jarak minimum antara dua daftar cincin (m); 0 bila bersentuhan."""
+    best = math.inf
+    for ra in rings_a:
+        for rb in rings_b:
+            for i in range(len(ra) - 1):
+                for j in range(len(rb) - 1):
+                    dd = _seg_seg_dist(ra[i], ra[i + 1],
+                                       rb[j], rb[j + 1])
+                    if dd < best:
+                        best = dd
+                        if best <= 0.0:
+                            return 0.0
+    return best
+
+
+def _group_touching_divider_polys(items, tol):
+    """Kelompokkan potongan pembagi poligon yang saling bersentuhan.
+
+    v0.7.5 (sambung potongan jalan, Derana 2026-11-27): persil jalan/
+    sungai yang dipotong pendek-pendek saat disetorkan terpisah-pisah
+    di GPKG. Potongan yang KET-nya sama DAN bersentuhan (jarak cincin
+    <= tol) adalah satu jalan yang nyambung — gabung jadi satu grup
+    (transitif: A menyentuh B, B menyentuh C -> satu grup). Potongan
+    yang tidak menyentuh potongan se-KET lain (ujung mentok beneran)
+    tetap sendiri. Dua jalan paralel terpisah (jarak > tol) tidak
+    digabung, begitu pula KET berbeda (jalan vs sungai di persimpangan).
+
+    `items` = list (key, ket_norm, rings); rings = daftar cincin,
+    tiap cincin daftar titik (x, y). Mengembalikan daftar grup
+    (daftar key), diurutkan deterministik. Murni (tanpa QGIS)."""
+    n = len(items)
+    parent = list(range(n))
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for i in range(n):
+        for j in range(i + 1, n):
+            if items[i][1] != items[j][1]:
+                continue
+            if _rings_min_dist(items[i][2], items[j][2]) <= tol:
+                ri, rj = find(i), find(j)
+                if ri != rj:
+                    parent[ri] = rj
+    groups = {}
+    for i in range(n):
+        groups.setdefault(find(i), []).append(items[i][0])
+    return sorted(groups.values(), key=lambda g: (len(g), g))
+
+
+def _merge_touching_divider_polys(dividers, geom_by_pk):
+    """Gabung (union) potongan pembagi poligon se-KET yang bersentuhan.
+
+    v0.7.5: dipanggil di awal _trimmed_divider_layers, SEBELUM
+    _open_ring + trim. Tiap grup sentuhan (lihat
+    _group_touching_divider_polys, ambang MERGE_TOL_M) di-union jadi
+    satu geometri — tepi bersama antar potongan hilang dari union,
+    jadi garis potongan di sambungan tidak ikut kegambar dan jalan
+    kelihatan nyambung. _open_ring + trim lalu diterapkan ke geometri
+    gabungan (pengaman keseimbangan v0.7.4 + toleransi trim tetap
+    berlaku). Pembagi GARIS (layer dividers) tidak digabung (sudah
+    berupa garis, bukan potongan poligon) dan dikembalikan apa adanya.
+
+    Mengembalikan (dividers_baru, geom_by_pk_baru): potongan yang
+    tergabung diganti satu FeatureBox sintetik id
+    "merged:<ket>:<fid1>+<fid2>..." dengan bbox geometri gabungan;
+    geometri gabungan dititipkan di geom_by_pk_baru dengan id itu.
+    Bila union gagal (combine mengembalikan null/kosong), grup itu
+    jatuh kembali ke potongan masing-masing (perilaku lama).
+    Butuh QGIS (QgsGeometry.combine)."""
+    poly_items = []  # (key, ket_norm, ket_asli, rings, geom)
+    kept = []
+    for d in dividers:
+        if d.lines:
+            kept.append(d)
+            continue
+        g = geom_by_pk.get(d.id)
+        if g is None:
+            kept.append(d)
+            continue
+        polys = g.asMultiPolygon() if g.isMultipart() else [g.asPolygon()]
+        rings = [[(p.x(), p.y()) for p in ring]
+                 for poly in polys for ring in poly]
+        if not rings:
+            kept.append(d)
+            continue
+        poly_items.append((d.id, str(d.ket).strip().upper(), d.ket,
+                           rings, g))
+    by_key = {it[0]: it for it in poly_items}
+    new_geoms = dict(geom_by_pk)
+    out = list(kept)
+    for keys in _group_touching_divider_polys(
+            [(k, kn, r) for (k, kn, _ka, r, _g) in poly_items],
+            MERGE_TOL_M):
+        members = [by_key[k] for k in keys]
+        if len(members) == 1:
+            out.append(next(d for d in dividers if d.id == keys[0]))
+            continue
+        ket = members[0][2]
+        merged = members[0][4]
+        ok = True
+        for m in members[1:]:
+            c = merged.combine(m[4])
+            if c is None or c.isNull() or c.isEmpty():
+                ok = False
+                break
+            merged = c
+        if not ok:
+            for m in members:
+                out.append(next(d for d in dividers if d.id == m[0]))
+            continue
+        bb = merged.boundingBox()
+        bbox = [bb.xMinimum(), bb.yMinimum(), bb.xMaximum(), bb.yMaximum()]
+        polys = (merged.asMultiPolygon() if merged.isMultipart()
+                 else [merged.asPolygon()])
+        rings = [[(p.x(), p.y()) for p in ring]
+                 for poly in polys for ring in poly]
+        mid = "merged:{}:{}".format(
+            members[0][1], "+".join(sorted(keys)))
+        out.append(FeatureBox(mid, bbox, rings, ket))
+        new_geoms[mid] = merged
+    return out, new_geoms
+
+
+def _trimmed_divider_layers(dividers, group, geom_by_pk, crs, layer_name,
+                            road_width_mm=0.5, water_width_mm=0.5):
     """Bangun layer memori pembagi lembar ini, SUDAH di-trim di Python.
 
     Akar masalah (v0.6.3, Preview): trim_expression memakai
@@ -1555,9 +2251,81 @@ def _trimmed_divider_layer(dividers, group, geom_by_pk, crs, layer_name):
     bbox-nya tidak memotong frame lembar tidak masuk (aturan subset
     yang sama seperti sebelumnya).
 
-    Mengembalikan QgsVectorLayer memori (MultiPolygon, field KET) atau
-    None bila tidak ada pembagi yang tersisa setelah trim."""
-    from qgis.core import QgsFeature, QgsVectorLayer
+    v0.6.4: pembagi GARIS (layer dividers) ikut di-trim di sini dan
+    dikembalikan sebagai layer MultiLineString terpisah — pembagi
+    poligon tetap MultiPolygon. Mengembalikan daftar layer memori
+    (0-2 lapis). Lebar garis mengikuti opsi panel.
+
+    v0.6.5: pembagi GARIS di-clip ke FRAME lembar (group.extent),
+    BUKAN ke buffer 5 m persil. Buffer 5 m memotong garis yang
+    berjalan > 5 m dari persil — jalan/sungai keluar sebagai potongan
+    pendek yang putus di tengah peta (dilaporkan Derana 2026-11-26:
+    "garis jalan atau selokan tidak utuh di Preview"). Frame adalah
+    area yang terlihat di peta, jadi garis utuh di dalam lembar dan
+    terpotong rapi di tepi frame. Pembagi POLIGON tetap memakai buffer
+    5 m (poligon punya isi — tanpa trim ia bisa menutupi peta).
+
+    v0.6.7: pembagi yang berbentuk POLIGON (jalan/sungai strip)
+    DIBUKA jadi garis terbuka — 2 segmen 'tutup ujung' (cap) di
+    ujung strip dibuang via _open_ring, jadi yang tergambar hanya
+    2 sisi panjangnya (permintaan Derana 2026-11-26, yang ditandai X
+    di screenshot). Berlaku untuk pembagi garis yang cincinnya
+    tertutup (Boundary poligon dari converter) maupun pembagi poligon
+    di layer utama. Poligon yang bukan strip (tidak bisa dibuka)
+    tetap digambar tertutup (perilaku lama).
+
+    v0.6.8 (koreksi atas v0.6.7, atas perintah Derana 2026-11-26:
+    "aku ingin tetap terpotong 5 m dari persil"): garis hasil bukaan
+    poligon di-trim ke BUFFER 5 m persil lembar, BUKAN ke frame.
+    v0.6.7 salah kaprah meng-clip-nya ke frame (seperti pembagi
+    garis) — akibatnya jalan/sungai tampil utuh sepanjang lembar.
+    Pembagi garis (converter) tetap di-clip ke frame (keputusan
+    v0.6.5, tidak berubah). Jadi v0.6.8 = tutup ujung dibuang +
+    tetap terpotong 5 m, persis seperti v0.6.6 minus tutupnya.
+
+    v0.6.9 (atas screenshot Derana 2026-11-26, X di dekat SITI
+    SA'ADAH 00870): garis hasil bukaan poligon di-trim ke cincin
+    5 m TANPA persil (buffer 5 m minus persil lembar), bukan ke
+    buffer penuh. Terbukti di sandbox: tepi jalan yang hampir
+    berimpit dengan batas persil menyilang batas itu di beberapa
+    titik (JALAN 117, JALAN 6, IRIGASI 75 vs persil 79) — X itu
+    bukan tutup, melainkan persilangan garis jalan/batas persil.
+    Dengan trim ke cincin tanpa persil, garis berhenti di batas
+    persil dan tidak menyilangnya. Pembagi garis (converter) dan
+    fallback poligon tertutup tidak berubah.
+
+    v0.7.4 (loop buntu, Derana 2026-11-27): trim v0.6.9 memotong garis
+    di TIAP sentuhan sudut persil — tepi jalan yang berjalan tepat di
+    batas persil (offset digitasi beberapa cm) terpotong jadi fragmen
+    pendek (4-6 potong dalam cakram r=5 m di titik yang dilingkari),
+    sehingga loop buntu putus di sudut persil. Perbaikan: persil
+    dikecilkan TRIM_TOL_M (0,20 m) saat menghitung `keep`, jadi garis
+    yang menyentuh/masuk persil sedalam <= 0,20 m tetap utuh; garis
+    yang masuk persil lebih dalam tetap terpotong (X-crossing v0.6.9
+    tetap dicegah). Aturan 5 m + tanpa-X tidak berubah.
+
+    v0.7.5 (sambung potongan jalan, Derana 2026-11-27: "persil jalan
+    itu terlalu panjang, jadi dipotong-potong, garis itu adalah garis
+    potongan untuk memperpendek persil" + "jalan itu seharusnya terbuka
+    dan nyambung, kecuali memang ... yang benar-benar mentok"): jalan/
+    sungai dijadikan persil saat disetorkan; karena terlalu panjang,
+    dibuat pendek-pendek, sehingga di GPKG persil jalan TERPISAH-PISAH
+    dan garis potongan antar potongan ikut kegambar — jalan kelihatan
+    DITUTUP. Perbaikan: potongan pembagi poligon yang KET-nya SAMA dan
+    BERSENTUHAN di-union dulu (lihat _merge_touching_divider_polys,
+    ambang MERGE_TOL_M) jadi satu jalan utuh SEBELUM _open_ring + trim;
+    tepi bersama antar potongan hilang dari union, jadi tidak ada garis
+    di sambungannya. Aturan bedakan mentok vs kepotong (disepakati
+    Derana): ujung potongan bersentuhan sama potongan jalan lain = satu
+    jalan yang nyambung; ujung tidak bersentuhan sama apa-apa = mentok
+    beneran (tetap sendiri, lalu _open_ring + pengaman v0.7.4 yang
+    menentukan tertutup/terbuka). Dua jalan paralel terpisah (KET sama
+    tapi jarak > MERGE_TOL_M) dan KET berbeda (jalan vs sungai di
+    persimpangan) TIDAK digabung."""
+
+    from qgis.core import (
+        QgsFeature, QgsGeometry, QgsPointXY, QgsRectangle, QgsVectorLayer,
+    )
 
     def bboxes_intersect(a, b):
         return a[0] <= b[2] and a[2] >= b[0] and a[1] <= b[3] and a[3] >= b[1]
@@ -1565,44 +2333,164 @@ def _trimmed_divider_layer(dividers, group, geom_by_pk, crs, layer_name):
     parcel_geoms = [
         geom_by_pk[i] for i in group.feature_ids if i in geom_by_pk
     ]
-    if not parcel_geoms:
-        return None
-    from qgis.core import QgsGeometry
-
-    collect = QgsGeometry.collectGeometry(parcel_geoms)
-    buf = collect.buffer(TRIM_BUFFER_M, 8)
-    feats = []
+    buf = None
+    keep = None
+    if parcel_geoms:
+        collect = QgsGeometry.collectGeometry(parcel_geoms)
+        buf = collect.buffer(TRIM_BUFFER_M, 8)
+        # keep = cincin 5 m di sekitar persil, TIDAK termasuk persil
+        # (v0.6.9): garis pembagi tidak boleh memotong batas persil.
+        # v0.7.4: persil dikecilkan TRIM_TOL_M dulu — tepi jalan yang
+        # berjalan tepat di batas persil (offset digitasi) tidak ikut
+        # terpotong di tiap sudut persil; loop buntu tetap utuh.
+        shrunk = collect.buffer(-TRIM_TOL_M, 8)
+        if shrunk is None or shrunk.isNull() or shrunk.isEmpty():
+            shrunk = collect
+        keep = buf.difference(shrunk)
+    frame_geom = QgsGeometry.fromRect(QgsRectangle(*group.extent))
+    poly_feats = []
+    line_feats = []
+    # v0.7.5: gabung potongan pembagi poligon se-KET yang bersentuhan
+    # (persil jalan/sungai yang dipotong pendek-pendek saat disetorkan
+    # terpisah-pisah di GPKG; garis potongan antar potongan ikut kegambar
+    # sehingga jalan kelihatan ditutup). Union dulu, baru _open_ring +
+    # trim ke geometri gabungan — sambungan hilang, jalan nyambung.
+    # Hanya KET sama + bersentuhan (<= MERGE_TOL_M); dua jalan paralel
+    # terpisah tidak digabung; ujung mentok tetap sendiri.
+    dividers, geom_by_pk = _merge_touching_divider_polys(
+        dividers, geom_by_pk)
     for d in dividers:
         if not bboxes_intersect(d.bbox, group.extent):
             continue
         g = geom_by_pk.get(d.id)
         if g is None:
             continue
-        trimmed = _as_multipolygon(g.intersection(buf))
-        if trimmed is None or trimmed.isEmpty():
-            continue
-        f = QgsFeature()
-        f.setGeometry(trimmed)
-        f.setAttributes([d.ket])
-        feats.append(f)
-    if not feats:
-        return None
-    uri = "MultiPolygon?crs={}&field=KET:string".format(crs.authid())
-    layer = QgsVectorLayer(uri, "{}_div".format(layer_name), "memory")
-    if not layer.isValid():
-        return None
-    layer.dataProvider().addFeatures(feats)
-    layer.updateExtents()
-    _apply_divider_style(layer)
-    return layer
+        if d.lines:
+            # Garis: buka cincin tertutup dulu (v0.6.7 — poligon
+            # jalan/sungai dari layer dividers), lalu clip ke frame
+            # (utuh di dalam lembar).
+            parts = (
+                g.asMultiPolyline()
+                if g.isMultipart()
+                else [g.asPolyline()]
+            )
+            opened = []
+            for part in parts:
+                pts = [(p.x(), p.y()) for p in part]
+                res = _open_ring(pts)
+                if res:
+                    opened.extend(res)
+                else:
+                    opened.append(pts)
+            ml_geom = QgsGeometry.fromMultiPolylineXY(
+                [[QgsPointXY(x, y) for x, y in ln] for ln in opened]
+            )
+            trimmed = ml_geom.intersection(frame_geom)
+            if trimmed is None or trimmed.isEmpty():
+                continue
+            ml = _as_multilinestring(trimmed)
+            if ml is None:
+                continue
+            f = QgsFeature()
+            f.setGeometry(ml)
+            f.setAttributes([d.ket])
+            line_feats.append(f)
+        else:
+            # Poligon: coba buka cincinnya jadi garis terbuka (v0.6.7).
+            # Bila bukan strip (tidak bisa dibuka), pakai perilaku lama
+            # (trim ke buffer 5 m persil, tetap poligon). Garis hasil
+            # bukaan di-trim ke cincin 5 m TANPA persil (v0.6.9 — Derana
+            # minta X persilangan garis jalan/batas persil juga hilang):
+            # garis tidak boleh memotong batas persil.
+            polys = (
+                g.asMultiPolygon()
+                if g.isMultipart()
+                else [g.asPolygon()]
+            )
+            opened = []
+            closed = []
+            for poly in polys:
+                if len(poly) == 1:
+                    pts = [(p.x(), p.y()) for p in poly[0]]
+                    res = _open_ring(pts)
+                    if res:
+                        opened.extend(res)
+                        continue
+                closed.append(poly)
+            if opened and keep is not None:
+                ml_geom = QgsGeometry.fromMultiPolylineXY(
+                    [[QgsPointXY(x, y) for x, y in ln] for ln in opened]
+                )
+                trimmed = ml_geom.intersection(keep)
+                if trimmed is not None and not trimmed.isEmpty():
+                    ml = _as_multilinestring(trimmed)
+                    if ml is not None:
+                        f = QgsFeature()
+                        f.setGeometry(ml)
+                        f.setAttributes([d.ket])
+                        line_feats.append(f)
+            if closed:
+                # v0.7.4: cincin yang tidak dibuka (loop buntu — jalan/
+                # gang buntu) digambar sebagai GARIS TERTUTUP, bukan
+                # poligon isi. Ring-nya di-trim ke `keep` (cincin 5 m
+                # tanpa persil, toleransi TRIM_TOL_M) persis seperti
+                # garis hasil bukaan: loop tetap utuh, tapi tidak
+                # memotong batas persil (aturan v0.6.9 tetap berlaku).
+                # (Jalur lama: poligon isi di-trim ke buf — outline-nya
+                # bisa menyilang persil karena buf mencakup persil, dan
+                # QgsGeometry.fromMultiPolygon tidak ada di QGIS 3.22.)
+                if keep is None:
+                    continue
+                ring_lines = []
+                for poly in closed:
+                    for ring_pts in poly:
+                        pts = [(p.x(), p.y()) for p in ring_pts]
+                        if len(pts) >= 2:
+                            ring_lines.append(pts)
+                if not ring_lines:
+                    continue
+                ml_geom = QgsGeometry.fromMultiPolylineXY(
+                    [[QgsPointXY(x, y) for x, y in ln]
+                     for ln in ring_lines]
+                )
+                trimmed = ml_geom.intersection(keep)
+                if trimmed is None or trimmed.isEmpty():
+                    continue
+                ml = _as_multilinestring(trimmed)
+                if ml is None:
+                    continue
+                f = QgsFeature()
+                f.setGeometry(ml)
+                f.setAttributes([d.ket])
+                line_feats.append(f)
+    layers = []
+    if poly_feats:
+        uri = "MultiPolygon?crs={}&field=KET:string".format(crs.authid())
+        layer = QgsVectorLayer(uri, "{}_div".format(layer_name), "memory")
+        if layer.isValid():
+            layer.dataProvider().addFeatures(poly_feats)
+            layer.updateExtents()
+            _apply_divider_style(layer, road_width_mm, water_width_mm)
+            layers.append(layer)
+    if line_feats:
+        uri = "MultiLineString?crs={}&field=KET:string".format(crs.authid())
+        layer = QgsVectorLayer(uri, "{}_divln".format(layer_name), "memory")
+        if layer.isValid():
+            layer.dataProvider().addFeatures(line_feats)
+            layer.updateExtents()
+            _apply_divider_line_style(layer, road_width_mm, water_width_mm)
+            layers.append(layer)
+    return layers
 
 
 def read_feature_boxes(layer, pk_col):
     """Baca fitur layer jadi FeatureBox (port load_feature_boxes).
 
     label_len per fitur dihitung dari baris label yang sama dengan
-    label_expression() (NAMA / NIB / L=...m2; fitur spesial hanya NAMA)
-    — dipakai mode Auto campuran v0.6.0."""
+    label_expression() (persil biasa NAMA / NIB / L=...m2; persil SHM
+    NIB / No Hak; fitur spesial hanya NAMA) — dipakai mode Auto
+    campuran v0.6.0. Jumlah baris label juga dicatat (label_lines,
+    v0.6.6) untuk tinggi label."""
     from qgis.core import QgsWkbTypes
 
     fields = [f.name() for f in layer.fields()]
@@ -1610,10 +2498,17 @@ def read_feature_boxes(layer, pk_col):
     by_lower = {f.lower(): f for f in fields}
     nama_field = by_lower.get("nama")
     nib_field = by_lower.get("080201")
+    hak_field = by_lower.get("080203")
     area_field = by_lower.get("m2") or by_lower.get("luas")
     area_is_luas = area_field is not None and area_field.lower() == "luas"
 
     def label_len_of(feature, ket):
+        """(panjang baris terpanjang, jumlah baris label) — barisnya
+        sama dengan label_expression() (v0.6.6): persil SHM hanya
+        NIB + No Hak (2 baris); persil biasa NAMA / NIB / L=...m2
+        (3 baris). Jumlah baris biasa minimal 3 (perilaku lama)
+        supaya persil biasa dan fitur spesial tidak berubah
+        penilaiannya."""
         def val(name):
             if name is None:
                 return ""
@@ -1622,8 +2517,13 @@ def read_feature_boxes(layer, pk_col):
 
         nama = val(nama_field)
         if is_special_ket(ket):
-            return len(nama)
+            return len(nama), 3
         nib = val(nib_field)
+        hak = val(hak_field)
+        if hak:
+            # SHM (v0.6.6): hanya NIB + No Hak.
+            n_lines = sum(1 for s in (nib, hak) if s)
+            return (max(len(nib), len(hak)), max(1, n_lines))
         raw = val(area_field)
         if not raw:
             luas_line = ""
@@ -1631,7 +2531,13 @@ def read_feature_boxes(layer, pk_col):
             luas_line = raw
         else:
             luas_line = "L={}m2".format(raw)
-        return max(len(nama), len(nib), len(luas_line))
+        n_lines = sum(
+            1 for s in (nama, nib, luas_line) if s
+        )
+        return (
+            max(len(nama), len(nib), len(luas_line)),
+            max(3, n_lines),
+        )
 
     boxes = []
     for feature in layer.getFeatures():
@@ -1657,16 +2563,99 @@ def read_feature_boxes(layer, pk_col):
             fid = feature.attribute(pk_col)
         else:
             fid = feature.id()
+        ll, nl = label_len_of(feature, ket)
         boxes.append(
             FeatureBox(
                 fid,
                 [bbox.xMinimum(), bbox.yMinimum(), bbox.xMaximum(), bbox.yMaximum()],
                 rings,
                 ket,
-                label_len=label_len_of(feature, ket),
+                label_len=ll,
+                label_lines=nl,
             )
         )
     return boxes, fields
+
+
+DIVIDER_LAYER_NAME = "dividers"
+
+
+def read_line_dividers(gpkg_path):
+    """Baca pembagi GARIS dari layer 'dividers' di GPKG yang sama.
+
+    Layer ini ditulis converter DWG/DXF -> GPKG v0.3.5 (jalan/gang/
+    sungai/selokan sebagai LINESTRING terbuka, field KET + Layer).
+    Mengembalikan (boxes, geoms): boxes = FeatureBox dengan lines
+    (id 'div:<pk>', rings kosong), geoms = {id: QgsGeometry} untuk
+    trim di Python (_trimmed_divider_layers). ([], {}) bila layer
+    tidak ada / kosong / tidak berisi garis pembagi."""
+    from qgis.core import QgsVectorLayer, QgsWkbTypes
+
+    boxes = []
+    geoms = {}
+    layer = QgsVectorLayer(
+        "{}|layername={}".format(gpkg_path, DIVIDER_LAYER_NAME),
+        DIVIDER_LAYER_NAME,
+        "ogr",
+    )
+    if not layer.isValid():
+        return boxes, geoms
+    fields = [f.name() for f in layer.fields()]
+    by_lower = {f.lower(): f for f in fields}
+    ket_field = by_lower.get("ket")
+    layer_field = by_lower.get("layer")
+    pk_col = detect_pk_column(layer)
+    for feat in layer.getFeatures():
+        geom = feat.geometry()
+        if geom is None or geom.isNull() or geom.isEmpty():
+            continue
+        ket = None
+        for src in (ket_field, layer_field):
+            if src:
+                v = feat.attribute(src)
+                if v is not None and str(v).strip():
+                    ket = str(v)
+                    break
+        if not is_special_ket(ket):
+            continue
+        lines = []
+        if geom.type() == QgsWkbTypes.GeometryType.LineGeometry:
+            parts = (
+                geom.asMultiPolyline()
+                if geom.isMultipart()
+                else [geom.asPolyline()]
+            )
+            for part in parts:
+                pts = [(p.x(), p.y()) for p in part]
+                if len(pts) >= 2:
+                    lines.append(pts)
+        if not lines:
+            continue
+        fid = feat.attribute(pk_col) if pk_col else feat.id()
+        box_id = "div:{}".format(fid)
+        bbox = geom.boundingBox()
+        boxes.append(
+            FeatureBox(
+                box_id,
+                [bbox.xMinimum(), bbox.yMinimum(), bbox.xMaximum(), bbox.yMaximum()],
+                [],
+                ket,
+                lines=lines,
+            )
+        )
+        geoms[box_id] = geom
+    return boxes, geoms
+
+
+def parse_width_mm(text, default=0.5):
+    """Parse lebar garis (mm) dari teks combo panel: '0,5' / '0.5' /
+    '1' / '1,5 mm' -> float. Gagal parse -> default."""
+    try:
+        cleaned = str(text).strip().lower().replace("mm", "").replace(",", ".").strip()
+        value = float(cleaned)
+        return value if value > 0 else default
+    except (TypeError, ValueError):
+        return default
 
 
 def detect_pk_column(layer):
@@ -1699,6 +2688,205 @@ def output_filename(batch, group_id, scale, with_imagery):
         scale.replace(":", "-"),
         "CITRA" if with_imagery else "TANPA_CITRA",
     )
+
+
+def sheet_shp_filename(batch, group_id, scale):
+    """Nama file SHP persil satu lembar (v0.7.2, port PBTK v0.2.3):
+    PBTF_{batch}_{Lxx}_{skala}_persil.shp. Ikut pola output_filename,
+    TANPA sufiks CITRA/TANPA_CITRA (SHP tidak tergantung citra — satu
+    SHP per grup, bukan per varian PDF). Murni."""
+    safe_group = "".join(c if c.isalnum() else "_" for c in group_id).strip("_")
+    return "PBTF_{}_{}_{}_persil.shp".format(
+        batch, safe_group, scale.replace(":", "-")
+    )
+
+
+def sheet_parcel_ids(group_ids, ket_by_id):
+    """ID persil (bukan pembagi) satu lembar (v0.7.2, port PBTK v0.2.3).
+    Murni (tanpa QGIS).
+
+    group_ids: id grup (pk string + 'div:...' pembagi garis).
+    ket_by_id: {id fitur layer: KET} dari boxes (hanya fitur layer).
+    Lolos: id ada di ket_by_id DAN KET-nya bukan spesial (persil biasa
+    KET None/kosong + SHM — SHM dideteksi via 080203, bukan KET).
+    Terbuang: KET spesial (JALAN/IRIGASI/...) dan 'div:...' (pembagi
+    garis bukan fitur layer, tidak ada di ket_by_id). Urutan grup
+    dipertahankan."""
+    return [
+        i for i in group_ids
+        if i in ket_by_id and not is_special_ket(ket_by_id[i])
+    ]
+
+
+def zip_sheet_shp(shp_path, log):
+    """Bundel 5 file komponen SHP satu lembar (.shp, .shx, .dbf, .prj,
+    .cpg) ke SATU file ZIP per lembar (v0.7.2 — permintaan Derana
+    2026-11-27: file SHP lepas menumpuk acak-acakan di folder output).
+
+    ZIP: {stem}_persil.zip (stem sama dengan .shp, di folder output
+    yang sama), berisi tepat 5 file komponen (tanpa folder di dalam
+    ZIP, nama file tetap PBTF_..._persil.*). Setelah ZIP terbentuk
+    DAN terverifikasi (zipfile valid + isi tepat 5 file yang
+    diharapkan), file komponen lepas DIHAPUS supaya folder output
+    bersih: 1 ZIP per lembar. Bila .cpg tidak ada (writer tidak
+    menulisnya), ditulis dulu berisi "UTF-8" (DBF memang UTF-8)
+    supaya tetap 5 file. Bila ZIP gagal / tidak terverifikasi, file
+    lepas DIBIARKAN (log peringatan) dan kembalikan (None, 0) —
+    SHP-nya tetap ada, hanya tidak ter-ZIP. Murni (tanpa QGIS).
+    Mengembalikan (zip_path, jumlah_file_di_zip)."""
+    import zipfile as _zf
+
+    base = os.path.splitext(shp_path)[0]
+    zip_path = base + ".zip"
+    exts = (".shp", ".shx", ".dbf", ".prj", ".cpg")
+    # .cpg: writer V2 dengan fileEncoding UTF-8 umumnya menulisnya;
+    # bila tidak ada, tulis sendiri (DBF ditulis UTF-8).
+    cpg_path = base + ".cpg"
+    if not os.path.exists(cpg_path):
+        try:
+            with open(cpg_path, "w", encoding="utf-8") as fh:
+                fh.write("UTF-8")
+        except OSError:  # nosec B110  # best-effort; verifikasi di bawah
+            pass
+    parts = []
+    for ext in exts:
+        p = base + ext
+        if os.path.exists(p):
+            parts.append(p)
+    if len(parts) != len(exts):
+        log("ZIP SHP dilewati: {} (komponen tidak lengkap: {}/{})".format(
+            os.path.basename(shp_path), len(parts), len(exts)))
+        return None, 0
+    if os.path.exists(zip_path):
+        os.remove(zip_path)
+    try:
+        with _zf.ZipFile(zip_path, "w", _zf.ZIP_DEFLATED) as zf:
+            for p in parts:
+                zf.write(p, os.path.basename(p))
+    except OSError as exc:
+        log("ZIP SHP gagal: {} ({})".format(os.path.basename(zip_path), exc))
+        return None, 0
+    # Verifikasi SEBELUM menghapus file lepas: zip valid + isi tepat
+    # 5 file yang diharapkan.
+    try:
+        if not _zf.is_zipfile(zip_path):
+            raise ValueError("bukan file ZIP")
+        with _zf.ZipFile(zip_path) as zf:
+            names = sorted(zf.namelist())
+        expected = sorted(os.path.basename(p) for p in parts)
+        if names != expected:
+            raise ValueError("isi ZIP tidak cocok: {}".format(names))
+    except (ValueError, _zf.BadZipFile) as exc:
+        log("ZIP SHP tidak terverifikasi: {} ({}) — file lepas dibiarkan".format(
+            os.path.basename(zip_path), exc))
+        return None, 0
+    for p in parts:
+        try:
+            os.remove(p)
+        except OSError:  # nosec B110  # best-effort; ZIP sudah jadi
+            pass
+    log("SHP ZIP: {} (5 file)".format(os.path.basename(zip_path)))
+    return zip_path, len(parts)
+
+
+def export_parcels_shp(layer, shp_path, log, pk_col=None, feature_ids=None, skip_empty=False):
+    """Ekspor persil saja (tanpa jalan/sungai/pembagi) ke Shapefile (v0.7.0;
+    v0.7.2: per lembar, port PBTK v0.2.3).
+
+    layer: QgsVectorLayer GPKG input (sudah dimuat; subset HARUS sudah
+    dibersihkan pemanggil supaya semua fitur terbaca). Hanya fitur yang
+    KET-nya BUKAN spesial (is_special_ket False) yang ditulis, dengan
+    SEMUA atribut + CRS asal. feature_ids (set pk string, opsional):
+    bila diberikan, hanya fitur yang pk-nya ada di himpunan itu yang
+    ditulis — dipakai render_batch untuk SHP per lembar (layer sudah
+    di-subset ke grup itu; filter id membuat hasil benar walau subset
+    gagal/lepas). pk_col: nama kolom pk (bila None, dideteksi; bila
+    tidak ketemu, dipakai id internal fitur). skip_empty: bila True dan
+    tidak ada persil yang cocok, lewati (log + kembalikan (None, 0))
+    alih-alih ValueError — dipakai lembar dengan 0 persil. Tanpa
+    feature_ids/skip_empty, perilaku lama (semua persil layer;
+    ValueError bila kosong) dipertahankan.
+    Pembacaan atribut memakai _attr_str (cek NULL eksplisit, bukan
+    pola val() lama). Mengembalikan (path, jumlah_persil).
+    SHP/DBF membatasi nama field 10 karakter dan lebar 254 — field
+    GPKG (080201, NAMA, LUAS, ...) sudah memenuhi; writer memotong
+    bila perlu. Penulis V2 dipakai dulu (ada di QGIS 3.22 dan 4.x),
+    V1 sebagai fallback."""
+    from qgis.core import (
+        QgsCoordinateTransformContext, QgsFeature, QgsVectorFileWriter,
+        QgsVectorLayer, QgsWkbTypes,
+    )
+    fields = layer.fields()
+    ket_idx = next(
+        (i for i, f in enumerate(fields) if f.name().lower() == "ket"), None
+    )
+    pk_idx = None
+    if feature_ids is not None:
+        col = pk_col or detect_pk_column(layer)
+        if col:
+            pk_idx = next(
+                (i for i, f in enumerate(fields) if f.name() == col), None
+            )
+    geom_name = QgsWkbTypes.displayString(QgsWkbTypes.flatType(layer.wkbType()))
+    crs = layer.crs()
+    mem = QgsVectorLayer(
+        "{}?crs={}".format(geom_name, crs.authid()), "persil", "memory"
+    )
+    mem.dataProvider().addAttributes(list(fields))
+    mem.updateFields()
+    feats = []
+    for feat in layer.getFeatures():
+        if feature_ids is not None:
+            key = feat.attribute(pk_idx) if pk_idx is not None else feat.id()
+            # pk di feature_ids disimpan sebagai string (FeatureBox.id);
+            # _attr_str menangani QVariant null (bukan "NULL").
+            if _attr_str(key) not in feature_ids:
+                continue
+        ket = (_attr_str(feat.attribute(ket_idx))
+               if ket_idx is not None else None)
+        if is_special_ket(ket):
+            continue
+        nf = QgsFeature(mem.fields())
+        nf.setAttributes(feat.attributes())
+        nf.setGeometry(feat.geometry())
+        feats.append(nf)
+    if not feats:
+        if skip_empty:
+            log("SHP dilewati: {} (0 persil di lembar ini)".format(
+                os.path.basename(shp_path)))
+            return None, 0
+        raise ValueError("Tidak ada persil (bukan pembagi) di layer ini.")
+    mem.dataProvider().addFeatures(feats)
+    # Hapus sidecar SHP lama supaya writer tidak gagal.
+    base = os.path.splitext(shp_path)[0]
+    for ext in (".shp", ".shx", ".dbf", ".prj", ".cpg", ".qmd"):
+        p = base + ext
+        if os.path.exists(p):
+            os.remove(p)
+    code = None
+    if hasattr(QgsVectorFileWriter, "writeAsVectorFormatV2"):
+        try:
+            opts = QgsVectorFileWriter.SaveVectorOptions()
+            opts.driverName = "ESRI Shapefile"
+            opts.fileEncoding = "UTF-8"
+            res = QgsVectorFileWriter.writeAsVectorFormatV2(
+                mem, shp_path, QgsCoordinateTransformContext(), opts
+            )
+            code = res[0] if isinstance(res, (tuple, list)) else res
+        except Exception:  # nosec B110  # fallback ke V1 di bawah
+            code = None
+    if code != 0 and hasattr(QgsVectorFileWriter, "writeAsVectorFormat"):
+        try:
+            res = QgsVectorFileWriter.writeAsVectorFormat(
+                mem, shp_path, "UTF-8", crs, "ESRI Shapefile"
+            )
+            code = res[0] if isinstance(res, (tuple, list)) else res
+        except Exception:  # nosec B110  # gagal total -> ValueError di bawah
+            code = None
+    if code != 0 or not os.path.exists(shp_path):
+        raise ValueError("Gagal menulis SHP persil: {}".format(shp_path))
+    log("SHP persil: {} ({} persil)".format(os.path.basename(shp_path), len(feats)))
+    return shp_path, len(feats)
 
 
 def zip_pdfs(pdf_paths, zip_path):
@@ -1837,12 +3025,14 @@ def _apply_frame_texts(layout, frame):
         # nama surveyor/penggunaan + dua PT tertukar. scenePos().y()
         # (fallback pos().y()) mengembalikan koordinat layout yang benar
         # (terbukti di sandbox 3.22: 177.97 / 218.76 / 259.15 dst).
-        for getter in ("scenePos", "pos"):
-            try:
-                return getattr(item, getter)().y()
-            except Exception:
-                continue
+        # Ditulis tanpa try-except-continue (Bandit B112) — validator
+        # plugins.qgis.org memblokir pola itu; fallback dicek dengan
+        # getattr + callable, bukan try di dalam loop.
         try:
+            for getter in ("scenePos", "pos"):
+                fn = getattr(item, getter, None)
+                if callable(fn):
+                    return fn().y()
             return item.rect().top()
         except Exception:
             return 0.0
@@ -2073,8 +3263,106 @@ def _set_sheet_subset(layer, pk_col, ids, group_id, log):
     return layer.subsetString()
 
 
+def _apply_map_grid(map_item, denominator):
+    """Atur grid peta per lembar (v0.7.2, opsi B — port PBTK v0.2.1).
+
+    Interval tanah = denominator * 0,1 m (jarak layout tetap 100 mm)
+    + offset supaya satu garis lewat titik jangkar PBT (pusat frame —
+    lihat GRID_ANCHOR_X_MM/GRID_ANCHOR_Y_MM; asumsi, dinyatakan di
+    laporan). Dijalankan per layout di _build_qgs_project (Preview +
+    Generate memakai jalur yang sama) DAN di loop PDF render_batch
+    (render_batch membangun layout sendiri, bukan via
+    _build_qgs_project), SETELAH map_item.setExtent — extent + ukuran
+    frame lembar menentukan offset, jadi dibaca dari map_item yang
+    bersangkutan (bukan dari group).
+    annotationPrecision diatur 0 (label bilangan bulat, seperti PBTK)
+    bila API tersedia — template PBTF_WARDOY.qpt memakai 2 (label
+    desimal, cth. 68140,25); 0 dipilih supaya konsisten dengan PBTK
+    dan label lebih bersih. Best-effort: bila API grid tidak tersedia
+    / gagal, grid template tetap dipakai; render tidak boleh gagal
+    karena grid. Mengembalikan True bila interval + offset berhasil
+    diatur.
+
+    PRASYARAT: pemanggil HARUS sudah mengatur CRS peta dari layer
+    (map_item.setCrs(layer.crs())) SEBELUM memanggil fungsi ini.
+    Template PBTF_WARDOY.qpt tidak menyimpan CRS peta, sehingga tanpa
+    setCrs skala peta terhitung 1:44 jt dan grid tidak ter-render
+    (interval tanah jadi ~0 mm di layout) walau interval/offset
+    sudah benar. (Template PBTK menyimpan CRS, jadi tidak kena.)
+
+    CATATAN SANDBOX (QGIS 3.22, TEST-PBT-274): garis grid ter-render
+    dan label menampilkan koordinat asli, TETAPI jarak antar garis
+    yang terukur di PDF adalah ~50 mm, bukan 100 mm yang dimaksud
+    (interval tanah efektif ~setengah dari yang diatur). Garis tetap
+    lewat titik jangkar (posisi jangkar ada di antara garis-garis
+    itu), hanya kerapatan garis 2x. Penyebab belum terisolasi:
+    terjadi baik saat CRS dari setCrs maupun dari template yang
+    sudah berisi CRS (PBTF_WARDOY v1.1), dan baik saat interval
+    template 0 maupun 100 — sementara template PBTK v7.6 dengan kode
+    yang sama ter-render tepat 100 mm. Diduga kekhasan QGIS 3.22
+    terhadap template ini; uji live di QGIS 4.2.2 adalah gerbang
+    untuk memastikan jarak sebenarnya. JANGAN menggandakan interval
+    sebagai jalan pintas sebelum 4.2.2 teruji (bila 4.2.2 tidak
+    membagi dua, gandaan itu justru jadi 200 mm).
+    """
+    try:
+        ext = map_item.extent()
+        extent = [ext.xMinimum(), ext.yMinimum(),
+                  ext.xMaximum(), ext.yMaximum()]
+        rect = map_item.rect()
+        map_mm = (rect.width(), rect.height())
+    except Exception:  # nosec B110
+        return False
+    offs = grid_offsets(extent, map_mm, denominator)
+    interval = grid_interval_m(denominator)
+    if offs is None or interval is None:
+        return False
+    grid = None
+    try:
+        grid = map_item.grid()
+    except Exception:  # nosec B110
+        grid = None
+    if grid is None:
+        try:
+            grids = map_item.grids()
+            grid = grids[0] if grids else None
+        except Exception:  # nosec B110
+            grid = None
+    if grid is None:
+        return False
+    try:
+        # Longgarkan dulu batas lebar interval template (min 50 /
+        # maks 100 mm): jarak layout opsi B selalu 100 mm (= batas
+        # maks) dan interval kecil (25 m di 1:250) tidak boleh diubah
+        # QGIS. API ini ada di QGIS 3.22 dan 4.x; gagal diam-diam bila
+        # tidak ada.
+        for setter, value in (("setMaximumIntervalWidth", 10000.0),
+                              ("setMinimumIntervalWidth", 0.0)):
+            try:
+                getattr(grid, setter)(value)
+            except Exception:  # nosec B110
+                pass
+        grid.setIntervalX(interval)
+        grid.setIntervalY(interval)
+        try:
+            grid.setOffsetX(offs[0])
+            grid.setOffsetY(offs[1])
+        except AttributeError:
+            from qgis.PyQt.QtCore import QPointF
+            grid.setOffset(QPointF(offs[0], offs[1]))
+        # Label bilangan bulat (seperti PBTK v0.2.1); bila API tidak
+        # ada, presisi template (2) tetap dipakai.
+        try:
+            grid.setAnnotationPrecision(0)
+        except Exception:  # nosec B110
+            pass
+    except Exception:  # nosec B110
+        return False
+    return True
+
+
 def _build_qgs_project(opts, groups, boxes, fields, pk_col, dividers, frame,
-                     return_project=False):
+                     divider_geoms=None, return_project=False):
     """Bangun SATU proyek QGIS (.qgs) berisi SEMUA lembar sebagai layout.
 
     Proyek terpisah (bukan QgsProject.instance()) supaya tidak menyentuh
@@ -2111,13 +3399,16 @@ def _build_qgs_project(opts, groups, boxes, fields, pk_col, dividers, frame,
     out_project.setCrs(probe.crs())
 
     # Geometri asli per pk (kunci str — FeatureBox.id berupa str) untuk
-    # trim pembagi di Python (lihat _trimmed_divider_layer).
+    # trim pembagi di Python (lihat _trimmed_divider_layers). Pembagi
+    # garis (id 'div:<pk>') geometrinya dari divider_geoms.
     geom_by_pk = {}
     for feat in probe.getFeatures():
         key = feat.attribute(pk_col) if pk_col else feat.id()
         g = feat.geometry()
         if g is not None and not g.isNull():
             geom_by_pk[str(key)] = g
+    if divider_geoms:
+        geom_by_pk.update(divider_geoms)
 
     raster = None
     if opts["with_imagery"]:
@@ -2133,7 +3424,7 @@ def _build_qgs_project(opts, groups, boxes, fields, pk_col, dividers, frame,
     for index, group in enumerate(groups):
         # Subset layer persil: HANYA persil lembar ini. Pembagi TIDAK lagi
         # dimasukkan ke layer ini — mereka digambar dari layer memori
-        # hasil _trimmed_divider_layer (trim di Python, bukan lewat
+        # hasil _trimmed_divider_layers (trim di Python, bukan lewat
         # aggregate yang gagal di proyek terpisah ini).
         ids = list(group.feature_ids)
         sheet_layer = QgsVectorLayer(
@@ -2144,18 +3435,24 @@ def _build_qgs_project(opts, groups, boxes, fields, pk_col, dividers, frame,
         # Gaya label per lembar (v0.6.0): ukuran font mengikuti skala
         # lembar ini — di mode Auto campuran tiap lembar bisa beda skala.
         denominator = parse_scale(group.scale) or 1000.0
-        apply_parcel_style(sheet_layer, outline_rgb, text_rgb, fields, denominator)
+        apply_parcel_style(sheet_layer, outline_rgb, text_rgb, fields, denominator,
+                           **_style_kwargs(opts))
         _set_sheet_subset(sheet_layer, pk_col, ids, group.id, log)
         out_project.addMapLayer(sheet_layer, False)
 
         # Pembagi (jalan/air) yang sudah di-trim di Python — layer memori
-        # per lembar; None bila tidak ada pembagi yang tersisa.
-        div_layer = _trimmed_divider_layer(
-            dividers, group, geom_by_pk, probe.crs(),
-            "{}_{}".format(layer_name, group.id),
-        )
+        # per lembar; [] bila tidak ada pembagi yang tersisa, atau bila
+        # opsi "Tampilkan jalan/sungai" dimatikan (v0.6.4).
+        div_layers = []
+        if opts.get("show_dividers", True):
+            div_layers = _trimmed_divider_layers(
+                dividers, group, geom_by_pk, probe.crs(),
+                "{}_{}".format(layer_name, group.id),
+                road_width_mm=float(opts.get("road_width_mm") or 0.5),
+                water_width_mm=float(opts.get("water_width_mm") or 0.5),
+            )
         map_layers = [sheet_layer]
-        if div_layer is not None:
+        for div_layer in div_layers:
             out_project.addMapLayer(div_layer, False)
             map_layers.append(div_layer)
 
@@ -2173,7 +3470,20 @@ def _build_qgs_project(opts, groups, boxes, fields, pk_col, dividers, frame,
             map_item.setKeepLayerSet(True)
         except Exception:  # nosec B110  # best-effort: kegagalan opsional diabaikan
             pass
+        # CRS peta dari layer GPKG (v0.7.2): template PBTF_WARDOY.qpt
+        # TIDAK menyimpan CRS peta (tidak ada elemen <crs>), sehingga
+        # map_item.crs() kosong dan skala terhitung 1:44 jt — grid
+        # tidak ter-render (interval tanah jadi ~0 mm di layout).
+        # Set eksplisit dari CRS data supaya skala + grid benar.
+        # (Template PBTK menyimpan CRS EPSG:23833, jadi tidak kena.)
+        try:
+            map_item.setCrs(probe.crs())
+        except Exception:  # nosec B110  # best-effort
+            pass
         map_item.setExtent(QgsRectangle(*group.extent))
+        # Grid skala-bergantung v0.7.2 (opsi B) — per layout, setelah
+        # setExtent (extent menentukan offset).
+        _apply_map_grid(map_item, denominator)
         map_item.setLayers(
             map_layers + ([raster] if opts["with_imagery"] and raster else [])
         )
@@ -2230,8 +3540,14 @@ def render_batch(opts):
     scale ('Auto'/'1:1000'/...), parcel_color (nama), text_color (nama),
     with_imagery, without_imagery, output_format ('pdf'/'zip'),
     date, pbt_number, block, logo_path, surveyor_path, leader_path,
-    log (callable(str) atau None), first_sheet_only (bool).
-    Mengembalikan dict {pdfs, zip, qgs, groups, warnings}."""
+    log (callable(str) atau None), first_sheet_only (bool),
+    export_shp (bool, v0.7.0; v0.7.2: per lembar + ZIP per lembar): tulis
+    SHP persil saja (tanpa pembagi) — satu file ZIP per lembar
+    (PBTF_{batch}_{Lxx}_{skala}_persil.zip, berisi 5 file komponen SHP;
+    file lepas dihapus setelah ZIP terverifikasi).
+    Mengembalikan dict {pdfs, zip, qgs, shp, groups, warnings} — "shp"
+    kini DAFTAR path ZIP SHP per lembar (list, kosong bila export_shp
+    mati)."""
     from qgis.core import (
         QgsExpressionContextUtils,
         QgsLayoutExporter,
@@ -2282,6 +3598,24 @@ def render_batch(opts):
     if not boxes:
         raise ValueError("Tidak ada fitur dengan geometri yang bisa dibaca di layer ini.")
     log("Fitur terbaca: {} (pk: {})".format(len(boxes), pk_col or "fid internal"))
+    # Pembagi garis (v0.6.4): layer 'dividers' di GPKG yang sama.
+    line_dividers, div_geoms = read_line_dividers(gpkg_path)
+    if line_dividers:
+        log("Pembagi garis: {} (layer dividers)".format(len(line_dividers)))
+    # Geometri untuk trim pembagi (v0.6.5): persil + pembagi garis.
+    # BUG v0.6.4 (dilaporkan Derana 2026-11-26 — Generate tanpa
+    # jalan/sungai): loop PDF memanggil _trimmed_divider_layers dengan
+    # div_geoms SAJA sebagai geom_by_pk, sehingga parcel_geoms kosong
+    # dan fungsi mengembalikan [] — layer pembagi tidak pernah dibuat
+    # di jalur PDF (Preview selamat karena _build_qgs_project memakai
+    # peta gabungan). Di sini petanya digabung dulu.
+    geom_by_pk = {}
+    for feat in layer.getFeatures():
+        key = feat.attribute(pk_col) if pk_col else feat.id()
+        g = feat.geometry()
+        if g is not None and not g.isNull():
+            geom_by_pk[str(key)] = g
+    geom_by_pk.update(div_geoms)
 
     layout = load_layout(opts["qpt_path"])
     map_item = _find_item_by_id_ci(layout, "Map 1")
@@ -2303,11 +3637,18 @@ def render_batch(opts):
         map_item.setKeepLayerSet(True)
     except Exception:  # nosec B110  # best-effort: kegagalan opsional diabaikan
         pass
+    # CRS peta dari layer GPKG (v0.7.2) — template PBTF_WARDOY.qpt tidak
+    # menyimpan CRS peta (lihat _build_qgs_project); tanpa ini skala
+    # terhitung 1:44 jt dan grid tidak ter-render.
+    try:
+        map_item.setCrs(layer.crs())
+    except Exception:  # nosec B110  # best-effort
+        pass
     rect = map_item.rect()
     map_mm = (rect.width(), rect.height())
     log("Template dimuat: peta {:.1f} x {:.1f} mm".format(*map_mm))
 
-    groups = group_feature_boxes(list(boxes), opts["scale"], map_mm)
+    groups = group_feature_boxes(list(boxes) + line_dividers, opts["scale"], map_mm)
     log("Grouping: {} lembar ({})".format(
         len(groups), ", ".join(str(len(g.feature_ids)) for g in groups)
     ))
@@ -2319,31 +3660,56 @@ def render_batch(opts):
     text_rgb = text_color_rgb(opts.get("text_color") or "")
     frame = _frame_values(opts)
 
-    dividers = [b for b in boxes if is_special_ket(b.ket) and b.rings]
+    # Pembagi poligon (di layer utama) + pembagi garis (layer dividers).
+    poly_dividers = [b for b in boxes if is_special_ket(b.ket) and b.rings]
+    dividers = poly_dividers + line_dividers
     batch = batch_code(gpkg_path)
     output_dir = opts["output_dir"]
     os.makedirs(output_dir, exist_ok=True)
-
-    def bboxes_intersect(a, b):
-        return a[0] <= b[2] and a[2] >= b[0] and a[1] <= b[3] and a[3] >= b[1]
+    # Peta id -> KET untuk filter SHP per lembar (v0.7.2): boxes berisi
+    # persil + pembagi poligon; pembagi garis ('div:...') tidak ada di
+    # sini sehingga terbuang oleh sheet_parcel_ids.
+    ket_by_id = {b.id: b.ket for b in boxes}
 
     pdfs = []
+    shp_paths = []
     warnings = []
     exporter = QgsLayoutExporter(layout)
     label_snapshot = _snapshot_label_texts(layout)
     for index, group in enumerate(groups):
         warnings.extend(group.warnings)
         ids = list(group.feature_ids)
-        for d in dividers:
-            if bboxes_intersect(d.bbox, group.extent):
-                ids.append(d.id)
+        # Pembagi poligon TIDAK lagi masuk subset layer persil (v0.6.7)
+        # — digambar dari layer memori hasil _trimmed_divider_layers
+        # (cincin dibuka jadi garis terbuka), sama seperti pembagi
+        # garis. Pembagi garis tidak bisa masuk subset (id 'div:...'
+        # bukan pk layer ini).
         _set_sheet_subset(layer, pk_col, ids, group.id, log)
         # Gaya label per lembar (v0.6.0): ukuran font mengikuti skala
         # lembar ini — di mode Auto campuran tiap lembar bisa beda skala.
         denominator = parse_scale(group.scale) or 1000.0
-        apply_parcel_style(layer, outline_rgb, text_rgb, fields, denominator)
+        apply_parcel_style(layer, outline_rgb, text_rgb, fields, denominator,
+                           **_style_kwargs(opts))
+        # Pembagi (poligon + garis) lembar ini (trim di Python,
+        # layer memori) — v0.6.7: pembagi poligon dan garis kini
+        # sama-sama lewat sini (cincin dibuka), jadi jalur PDF dan
+        # Preview/.qgs konsisten.
+        div_line_layers = []
+        if opts.get("show_dividers", True) and dividers:
+            div_line_layers = _trimmed_divider_layers(
+                dividers, group, geom_by_pk, layer.crs(),
+                "{}_{}".format(layer_name, group.id),
+                road_width_mm=float(opts.get("road_width_mm") or 0.5),
+                water_width_mm=float(opts.get("water_width_mm") or 0.5),
+            )
+            for dl in div_line_layers:
+                project.addMapLayer(dl, False)
         map_item.setExtent(QgsRectangle(*group.extent))
-        map_item.setLayers([layer] + ([raster] if raster else []))
+        # Grid skala-bergantung v0.7.2 (opsi B) — jalur PDF render_batch
+        # membangun layout sendiri (bukan via _build_qgs_project), jadi
+        # grid harus diatur di sini juga supaya PDF = Preview/.qgs.
+        _apply_map_grid(map_item, denominator)
+        map_item.setLayers([layer] + div_line_layers + ([raster] if raster else []))
         # Kembalikan label ke bentuk template dulu (lihat
         # _snapshot_label_texts), baru tulis nilai lembar ini.
         _restore_label_texts(label_snapshot)
@@ -2404,7 +3770,13 @@ def render_batch(opts):
                 continue
             if not with_imagery and not opts["without_imagery"]:
                 continue
-            map_item.setLayers([layer] + ([raster] if with_imagery and raster else []))
+            # v0.6.5: setLayers di sini MENIMPA setLayers sebelum loop —
+            # pembagi garis HARUS ikut, kalau tidak PDF selalu tanpa
+            # jalan/sungai (bug v0.6.4, dilaporkan Derana 2026-11-26).
+            map_item.setLayers(
+                [layer] + div_line_layers
+                + ([raster] if with_imagery and raster else [])
+            )
             pdf_path = os.path.join(
                 output_dir,
                 output_filename(batch, group.id, group.scale, with_imagery),
@@ -2428,6 +3800,26 @@ def render_batch(opts):
             log("PDF: {} ({:.0f} KB)".format(
                 os.path.basename(pdf_path), os.path.getsize(pdf_path) / 1024.0
             ))
+        # SHP persil PER LEMBAR + ZIP per lembar (v0.7.2): satu ZIP per
+        # grup, hanya persil grup ini (termasuk SHM, tanpa pembagi).
+        # Ditulis di dalam loop (subset layer masih aktif ke grup ini)
+        # + filter id eksplisit supaya benar walau subset gagal/lepas.
+        # Lembar 0 persil dilewati; file lepas dihapus setelah ZIP
+        # terverifikasi (zip_sheet_shp).
+        if opts.get("export_shp"):
+            parcel_ids = sheet_parcel_ids(ids, ket_by_id)
+            shp_path_g = os.path.join(
+                output_dir, sheet_shp_filename(batch, group.id, group.scale)
+            )
+            _p, _n = export_parcels_shp(
+                layer, shp_path_g, log, pk_col=pk_col,
+                feature_ids=set(parcel_ids), skip_empty=True,
+            )
+            if _p:
+                zip_path_g, _nz = zip_sheet_shp(_p, log)
+                # Artefak SHP per lembar = ZIP-nya; bila ZIP gagal,
+                # file .shp lepas tetap dipakai sebagai fallback.
+                shp_paths.append(zip_path_g if zip_path_g else _p)
 
     layer.setSubsetString("")
     zip_path = None
@@ -2453,9 +3845,10 @@ def render_batch(opts):
     qgs_path = None
     if opts.get("save_qgs", True):
         qgs_path = _build_qgs_project(
-            opts, groups, boxes, fields, pk_col, dividers, frame
+            opts, groups, boxes, fields, pk_col, dividers, frame,
+            divider_geoms=div_geoms,
         )
-    return {"pdfs": pdfs, "zip": zip_path, "qgs": qgs_path, "groups": groups, "warnings": warnings}
+    return {"pdfs": pdfs, "zip": zip_path, "qgs": qgs_path, "shp": shp_paths, "groups": groups, "warnings": warnings}
 
 
 def render_preview(opts, dpi=96):
@@ -2510,6 +3903,10 @@ def render_preview(opts, dpi=96):
     if not boxes:
         raise ValueError("Tidak ada fitur dengan geometri yang bisa dibaca di layer ini.")
     log("Fitur terbaca: {} (pk: {})".format(len(boxes), pk_col or "fid internal"))
+    # Pembagi garis (v0.6.4): layer 'dividers' di GPKG yang sama.
+    line_dividers, div_geoms = read_line_dividers(gpkg_path)
+    if line_dividers:
+        log("Pembagi garis: {} (layer dividers)".format(len(line_dividers)))
 
     layout = load_layout(opts["qpt_path"])
     map_item = _find_item_by_id_ci(layout, "Map 1")
@@ -2525,7 +3922,7 @@ def render_preview(opts, dpi=96):
     rect = map_item.rect()
     map_mm = (rect.width(), rect.height())
 
-    groups = group_feature_boxes(list(boxes), opts["scale"], map_mm)
+    groups = group_feature_boxes(list(boxes) + line_dividers, opts["scale"], map_mm)
     log("Grouping: {} lembar ({})".format(
         len(groups), ", ".join(str(len(g.feature_ids)) for g in groups)
     ))
@@ -2538,14 +3935,14 @@ def render_preview(opts, dpi=96):
     for g in groups:
         warnings.extend(g.warnings)
 
-    dividers = [b for b in boxes if is_special_ket(b.ket) and b.rings]
+    dividers = [b for b in boxes if is_special_ket(b.ket) and b.rings] + line_dividers
     frame = _frame_values(opts)
     temp_dir = tempfile.mkdtemp(prefix="yuk-pbt-preview-")
     preview_opts = dict(opts)
     preview_opts["output_dir"] = temp_dir
     qgs_path, project = _build_qgs_project(
         preview_opts, groups, boxes, fields, pk_col, dividers, frame,
-        return_project=True,
+        divider_geoms=div_geoms, return_project=True,
     )
 
     # Export PNG per layout (layout dibangun _build_qgs_project dengan

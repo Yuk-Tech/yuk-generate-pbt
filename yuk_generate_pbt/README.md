@@ -174,6 +174,103 @@ Contoh file GPKG yang sudah sesuai struktur ini:
 
 ### Changelog
 
+- **v0.7.1 (2026-11-26):** halo putih buffer teks dinaikkan 0,1 mm
+  -> **0,5 mm** (0,1 ternyata terlalu kecil). Sisanya sama dengan
+  v0.7.0.
+- **v0.7.0 (2026-11-26):** opsi output baru — **Ekspor SHP persil saja**
+  (checkbox di grup Output, default mati): saat Generate, selain PDF/
+  ZIP/.qgs, plugin juga menulis `PBTF_<batch>_persil.shp` (+ .shx,
+  .dbf, .prj, .cpg) berisi **persil saja** — semua fitur yang KET-nya
+  bukan jalan/sungai/pembagi — dengan semua atribut + CRS asal.
+  Pembagi poligon (JALAN/IRIGASI) dan pembagi garis (layer dividers)
+  tidak ikut. SHP memuat SEMUA persil input (bukan hanya lembar yang
+  dirender). Penulis V2 dulu (QGIS 3.22 + 4.x), V1 sebagai fallback.
+  Teruji: PBT_2091 -> 115 persil, Tes.gpkg -> 24 persil, CRS
+  EPSG:23834, terbaca kembali dengan benar.
+- **v0.6.9 (2026-11-26):** garis hasil bukaan poligon kini di-trim ke
+  **cincin 5 m TANPA persil** (buffer 5 m minus persil lembar), bukan
+  ke buffer penuh. Alasan: terbukti di sandbox, tepi jalan yang
+  hampir berimpit dengan batas persil menyilang batas itu di
+  beberapa titik (JALAN 117, JALAN 6, IRIGASI 75 vs persil SITI
+  SA'ADAH 00870) — X di screenshot Derana itu bukan tutup,
+  melainkan persilangan garis jalan/batas persil. Dengan trim ke
+  cincin tanpa persil, garis berhenti di batas persil dan tidak
+  menyilangnya (uji silang: 0 dari 88 segmen). Jalan tetap utuh
+  (PBT_2091 oranye 16011 vs 16013 di v0.6.8). Pembagi garis
+  (converter) dan fallback poligon tertutup tidak berubah.
+- **v0.6.8 (2026-11-26):** koreksi atas v0.6.7, atas perintah Derana
+  ("aku ingin tetap terpotong 5 m dari persil"): garis hasil bukaan
+  poligon kini di-trim ke **buffer 5 m persil lembar**, BUKAN ke
+  frame. v0.6.7 salah kaprah meng-clip-nya ke frame sehingga jalan/
+  sungai tampil utuh sepanjang lembar. Jadi v0.6.8 = tutup ujung
+  dibuang + tetap terpotong 5 m (persis v0.6.6 minus tutupnya).
+  Pembagi garis (converter) tetap di-clip ke frame (keputusan
+  v0.6.5, tidak berubah).
+- **v0.6.7 (2026-11-26):** pembagi jalan/sungai yang berbentuk POLIGON
+  kini digambar sebagai garis TERBUKA — 2 segmen 'tutup ujung' (cap)
+  di ujung strip dibuang (atas permintaan Derana, yang ditandai X di
+  screenshot), jadi yang tergambar hanya 2 sisi panjangnya. Berlaku
+  untuk poligon di layer utama maupun cincin tertutup dari layer
+  `dividers` (converter). Poligon yang bukan strip (mis. persimpangan)
+  tetap tertutup. Sekalian: jalur PDF dan Preview/.qgs kini konsisten
+  (semua pembagi lewat `_trimmed_divider_layers`); rule geometry
+  generator jalan/sungai dihapus dari `apply_parcel_style`, fungsi
+  `trim_expression` dihapus. Uji murni baru `test_open_ring.py`
+  (11/11) + data sintetis Test269.gpkg.
+- **v0.6.6 (2026-11-26):** label persil SHM disederhanakan atas
+  koreksi Derana ("untuk Persil SHM hanya perlu NIB dan No Haknya
+  saja"): SHM kini hanya NIB + No Hak (080203), 2 baris — tanpa NAMA,
+  tanpa LUAS, tanpa No SU (080202 dihapus dari label). Persil biasa
+  tetap NAMA / NIB / L=...m2. `label_fits` memakai 2 baris untuk SHM.
+  Uji murni baru `test_label_shm.py` (10/10) menggantikan
+  `test_label_hak_su.py`.
+- **v0.6.5 (2026-11-26):** perbaikan dari evaluasi Derana atas v0.6.4.
+  **Generate tanpa jalan/sungai:** jalur PDF (`render_batch`) memanggil
+  `_trimmed_divider_layers` dengan `div_geoms` saja sebagai `geom_by_pk`,
+  sehingga buffer persil kosong dan fungsi mengembalikan `[]` — layer
+  pembagi tidak pernah dibuat di PDF (Preview selamat karena
+  `_build_qgs_project` memakai peta geometri gabungan). Sekarang
+  `render_batch` membangun peta gabungan (geometri persil + pembagi)
+  sebelum loop lembar. **Garis tidak utuh di Preview:** pembagi garis
+  di-trim ke buffer 5 m persil — garis yang berjalan > 5 m dari persil
+  terpotong jadi fragmen pendek yang putus di tengah peta. Sekarang
+  pembagi garis di-clip ke **frame lembar** (utuh di dalam lembar,
+  terpotong rapi di tepi); pembagi poligon tetap memakai buffer 5 m.
+  **Warna core:** Ungu FE01AE, Hijau 00FB00, Merah FD0000 (kode Derana)
+  — berlaku untuk palet (warna persil, warna teks, warna SHM).
+  **Label No Hak + No SU:** baris label bertambah — NAMA / NIB /
+  L=...m2 / No Hak (080203) / No SU (080202); dua baris terakhir
+  hanya muncul bila field-nya terisi, jadi persil biasa tetap 3 baris.
+  Penilaian muat label (`label_fits`) memakai jumlah baris sebenarnya
+  (3 / 4 / 5) lewat `FeatureBox.label_lines`. Uji murni baru
+  `test_label_hak_su.py` (10/10). **Dikoreksi di v0.6.6** (di bawah):
+  persil SHM hanya NIB + No Hak, No SU dihapus.
+  **Panel lebih lebar + pengelompokan profesional:** dock minimum 420 px
+  (panel 400 px), form label-di-kiri, dan grup baru: Data, Peta,
+  Tampilan, Pengesahan, Isi Frame, Output (sebelumnya form datar +
+  label-di-atas-field). Uji TEST-267 (sandbox): PDF + Preview.
+- **v0.6.4 (2026-11-26):** pembagi garis + grup "Tampilan" di panel.
+  **Pembagi garis:** GPKG hasil converter v0.3.5 menaruh jalan/gang/
+  sungai/selokan sebagai garis di layer kedua `dividers` (bukan lagi
+  poligon di layer utama) — plugin sekarang membaca layer itu otomatis
+  (status "Pembagi garis: N" muncul di panel) dan memakainya dua arah:
+  sebagai batas blok di grouping Auto (`detect_blocks`, jarak tanpa
+  segmen penutup — garis tidak ditutup seperti cincin) dan sebagai
+  garis yang digambar di peta (di-trim ke buffer 5 m persil lembar,
+  layer memori MultiLineString per lembar). Pembagi poligon dari GPKG
+  lama (PBT_2091) tetap jalan seperti biasa. **Toggle tampil:**
+  checkbox "Tampilkan jalan/sungai di peta" (default nyala) — yang
+  disembunyikan cuma tampilannya; Auto tetap memakai pembagi sebagai
+  batas blok. **Lebar garis:** empat pilihan terpisah (0,25 / 0,5 /
+  0,75 / 1 / 1,5 mm, default 0,5) untuk garis jalan, sungai, persil,
+  dan SHM. **Warna SHM:** pilihan warna sendiri (default Ungu/magenta,
+  mengikuti kebiasaan PBF) — persil SHM dikenali dari field `080203`
+  yang terisi; sebelumnya SHM digambar sama dengan persil biasa.
+  **Buffer teks:** checkbox "Buffer teks" (default mati = seperti
+  sekarang) — sekali nyala, semua baris label mendapat halo putih 0,5 mm.
+  Pemilih layer di panel tidak lagi menampilkan layer pembantu
+  `dividers`/`labels`. Uji baru `test_dividers_line.py` (murni, tanpa
+  QGIS) + render sandbox di bawah.
 - **v0.6.3 (2026-11-26):** perbaikan pembagian lembar mode Auto. Sebelumnya
   persil dipilah ke tier skala *per persil* sebelum dikelompokkan, sehingga
   persil besar dan kecil yang bertetangga di satu blok jatuh ke lembar
@@ -211,6 +308,17 @@ Contoh file GPKG yang sudah sesuai struktur ini:
   (WARDOY + Demo) dengan nama berbeda — surveyor di blok "Untuk
   Pembuatannya", penggunaan di blok "Untuk Penggunaannya" (uji baru
   `test_frame_names.py`).
+  **Perbaikan kompatibilitas Qt6 + temuan Bandit (juga v0.6.3):**
+  validator plugins.qgis.org menolak versi ini karena 6 pemakaian enum
+  tanpa scope (`QDialog.Accepted`, `QgsWkbTypes.Polygon` /
+  `MultiPolygon` / `GeometryCollection`) yang melempar AttributeError
+  di PyQt6 (QGIS 4) — sekarang memakai bentuk scoped
+  (`QDialog.DialogCode.Accepted`, `QgsWkbTypes.Type.*`), yang tetap
+  jalan di QGIS 3.22 (terbukti di sandbox: nilai enum sama). Validator
+  juga memblokir pola try-except-continue (Bandit B112) di `_y()` —
+  fungsi itu kini ditulis ulang tanpa pola tersebut (fallback dicek
+  dengan `getattr` + `callable`); Bandit 1.9.4 kini 0 temuan di 6 file
+  plugin.
 - **v0.6.2 (2026-11-26):** **Preview tanpa kuota** atas permintaan Derana
   ("rugi kalau kuota sudah terpakai tapi hasilnya tidak sesuai
   ekspektasi"). Tombol **Preview** baru di panel (di samping Hitung
@@ -672,6 +780,17 @@ A sample GPKG file following this structure:
   (WARDOY + Demo) with distinct names — surveyor in the "Untuk
   Pembuatannya" block, usage in the "Untuk Penggunaannya" block (new
   test `test_frame_names.py`).
+  **Qt6 compatibility + Bandit finding fix (also v0.6.3):** the
+  plugins.qgis.org validator rejected this version over 6 unscoped enum
+  uses (`QDialog.Accepted`, `QgsWkbTypes.Polygon` / `MultiPolygon` /
+  `GeometryCollection`) that raise AttributeError under PyQt6 (QGIS 4)
+  — they now use the scoped forms (`QDialog.DialogCode.Accepted`,
+  `QgsWkbTypes.Type.*`), which still resolve under QGIS 3.22 (verified
+  in the sandbox: identical enum values). The validator also blocked a
+  try-except-continue pattern (Bandit B112) in `_y()` — that helper is
+  now written without it (fallbacks checked with `getattr` +
+  `callable`); Bandit 1.9.4 now reports 0 issues across the 6 plugin
+  files.
 - **v0.6.2 (2026-11-26):** **Quota-free Preview** at Derana's request
   ("a waste if quota is already spent but the result doesn't match
   expectations"). A new **Preview** button on the panel (next to Count

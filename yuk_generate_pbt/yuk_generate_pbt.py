@@ -78,6 +78,10 @@ class YukGeneratePbtPlugin:
             scroll.setHorizontalScrollBarPolicy(SCROLLBAR_OFF)
             self.dock = QDockWidget(PLUGIN_TITLE, self.iface.mainWindow())
             self.dock.setObjectName("yukGeneratePbtDock")
+            # Panel dibuka lebih lebar (v0.6.5): form label-di-kiri +
+            # pengelompokan butuh ruang; 420 px minimum, pengguna tetap
+            # bisa memperlebar dock.
+            self.dock.setMinimumWidth(420)
             self.dock.setWidget(scroll)
             # Sinkronkan tombol toolbar saat dock ditutup lewat X-nya.
             self.dock.visibilityChanged.connect(self._on_dock_visibility)

@@ -60,9 +60,6 @@ from qgis.PyQt.QtWidgets import (
     QWidget,
 )
 
-# QFormLayout.WrapAllRows — label di atas field, untuk panel sempit.
-WRAP_ALL_ROWS = _enum_value(QFormLayout, "RowWrapPolicy", "WrapAllRows", 2)
-
 from . import engine
 from . import license as lic
 
@@ -89,6 +86,8 @@ TEXT_COLORS = [
     "Oranye",
     "Hitam",
 ]
+# Lebar garis (mm) — pilihan per jenis garis (v0.6.4).
+WIDTH_OPTIONS = ["0,25", "0,5", "0,75", "1", "1,5"]
 HISTORY_KEY = "yuk-generate-pbt/history"
 HISTORY_MAX = 20
 
@@ -149,6 +148,11 @@ class YukGeneratePbtPanel(QWidget):
     def _build_ui(self):
         root = QVBoxLayout(self)
 
+        # Panel dibuka lebih lebar (v0.6.5, permintaan Derana): form
+        # label-di-kiri butuh ruang; dock di-set minimum 420 di
+        # yuk_generate_pbt.py, panel sendiri minimum 400.
+        self.setMinimumWidth(400)
+
         # Header vertikal (logo di atas, judul di bawah) — panel sidebar
         # itu sempit, header horizontal tidak muat.
         header = QVBoxLayout()
@@ -180,8 +184,11 @@ class YukGeneratePbtPanel(QWidget):
         self.code_edit.setPlaceholderText("cth. YUK-XXXXXX-XXXXXX")
         self.activate_button = QPushButton("Aktifkan")
         self.activate_button.clicked.connect(self._on_activate)
+        self.deactivate_button = QPushButton("Nonaktifkan")
+        self.deactivate_button.clicked.connect(self._on_deactivate)
         access_row.addWidget(self.code_edit)
         access_row.addWidget(self.activate_button)
+        access_row.addWidget(self.deactivate_button)
         access.addLayout(access_row)
         self.license_status = QLabel(lic.status_text())
         self.license_status.setWordWrap(True)
@@ -196,31 +203,36 @@ class YukGeneratePbtPanel(QWidget):
         access.addWidget(self.contact_label)
         root.addWidget(access_box)
 
-        form = QFormLayout()
-        form.setRowWrapPolicy(WRAP_ALL_ROWS)
+        # Data (v0.6.5): sumber peta — GeoPackage + template + citra.
+        data_box = QGroupBox("Data")
+        data = QFormLayout()
         self.gpkg_edit = QLineEdit()
         self.gpkg_edit.setPlaceholderText("Pilih file .gpkg …")
         self.gpkg_edit.textChanged.connect(self._on_gpkg_changed)
-        form.addRow("GeoPackage:", self._picker(self.gpkg_edit, "Pilih GeoPackage", "GeoPackage (*.gpkg)"))
+        data.addRow("GeoPackage:", self._picker(self.gpkg_edit, "Pilih GeoPackage", "GeoPackage (*.gpkg)"))
         self.layer_combo = QComboBox()
-        form.addRow("Layer:", self.layer_combo)
+        data.addRow("Layer:", self.layer_combo)
         self.qpt_edit = QLineEdit()
         self.qpt_edit.setPlaceholderText("Pilih template .qpt (PBTF_WARDOY.qpt) …")
-        form.addRow("Template QPT:", self._picker(self.qpt_edit, "Pilih template QPT", "QGIS Print Template (*.qpt)"))
+        data.addRow("Template QPT:", self._picker(self.qpt_edit, "Pilih template QPT", "QGIS Print Template (*.qpt)"))
         self.ecw_edit = QLineEdit()
         self.ecw_edit.setPlaceholderText("Opsional — citra ECW untuk varian CITRA …")
-        form.addRow("Citra ECW:", self._picker(self.ecw_edit, "Pilih citra ECW", "ECW (*.ecw);;Semua file (*)"))
+        data.addRow("Citra ECW:", self._picker(self.ecw_edit, "Pilih citra ECW", "ECW (*.ecw);;Semua file (*)"))
+        data_box.setLayout(data)
+        root.addWidget(data_box)
+
+        # Peta (v0.6.5): skala + warna + varian citra.
+        map_box = QGroupBox("Peta")
+        map_form = QFormLayout()
         self.scale_combo = QComboBox()
         self.scale_combo.addItems(SCALES)
-        form.addRow("Skala:", self.scale_combo)
+        map_form.addRow("Skala:", self.scale_combo)
         self.parcel_color_combo = QComboBox()
         self.parcel_color_combo.addItems(PARCEL_COLORS)
-        form.addRow("Warna persil:", self.parcel_color_combo)
+        map_form.addRow("Warna persil:", self.parcel_color_combo)
         self.text_color_combo = QComboBox()
         self.text_color_combo.addItems(TEXT_COLORS)
-        form.addRow("Warna teks:", self.text_color_combo)
-        root.addLayout(form)
-
+        map_form.addRow("Warna teks:", self.text_color_combo)
         variants = QHBoxLayout()
         self.with_imagery_check = QCheckBox("Dengan citra ECW")
         self.without_imagery_check = QCheckBox("Tanpa citra")
@@ -228,10 +240,48 @@ class YukGeneratePbtPanel(QWidget):
         variants.addWidget(self.with_imagery_check)
         variants.addWidget(self.without_imagery_check)
         variants.addStretch(1)
-        root.addLayout(variants)
+        map_form.addRow("Varian:", variants)
+        map_box.setLayout(map_form)
+        root.addWidget(map_box)
 
+        # Tampilan (v0.6.4): pembagi jalan/sungai, lebar garis per jenis,
+        # warna SHM, buffer teks.
+        display_box = QGroupBox("Tampilan")
+        display = QFormLayout()
+        self.show_dividers_check = QCheckBox("Tampilkan jalan/sungai di peta")
+        self.show_dividers_check.setChecked(True)
+        display.addRow(self.show_dividers_check)
+        self.road_width_combo = QComboBox()
+        self.road_width_combo.addItems(WIDTH_OPTIONS)
+        self.road_width_combo.setCurrentText("0,5")
+        display.addRow("Garis jalan (mm):", self.road_width_combo)
+        self.water_width_combo = QComboBox()
+        self.water_width_combo.addItems(WIDTH_OPTIONS)
+        self.water_width_combo.setCurrentText("0,5")
+        display.addRow("Garis sungai (mm):", self.water_width_combo)
+        self.parcel_width_combo = QComboBox()
+        self.parcel_width_combo.addItems(WIDTH_OPTIONS)
+        self.parcel_width_combo.setCurrentText("0,5")
+        display.addRow("Garis persil (mm):", self.parcel_width_combo)
+        self.shm_width_combo = QComboBox()
+        self.shm_width_combo.addItems(WIDTH_OPTIONS)
+        self.shm_width_combo.setCurrentText("0,5")
+        display.addRow("Garis SHM (mm):", self.shm_width_combo)
+        self.shm_color_combo = QComboBox()
+        self.shm_color_combo.addItems(PARCEL_COLORS)
+        self.shm_color_combo.setCurrentText("Ungu")
+        display.addRow("Warna SHM:", self.shm_color_combo)
+        self.text_buffer_check = QCheckBox("Buffer teks")
+        display.addRow(self.text_buffer_check)
+        self.dividers_status = QLabel("")
+        self.dividers_status.setWordWrap(True)
+        display.addRow(self.dividers_status)
+        display_box.setLayout(display)
+        root.addWidget(display_box)
+
+        # Pengesahan (v0.6.5): tanggal + nomor + logo + tanda tangan.
+        sign_box = QGroupBox("Pengesahan")
         sign = QFormLayout()
-        sign.setRowWrapPolicy(WRAP_ALL_ROWS)
         self.date_edit = QLineEdit()
         self.date_edit.setPlaceholderText("cth. 20 November 2026")
         sign.addRow("Tanggal:", self.date_edit)
@@ -247,13 +297,13 @@ class YukGeneratePbtPanel(QWidget):
         sign.addRow("TTD Petugas Ukur:", self._picker(self.surveyor_edit, "Pilih TTD Petugas Ukur", "Gambar (*.png *.jpg *.jpeg)"))
         self.leader_edit = QLineEdit()
         sign.addRow("TTD Pimpinan:", self._picker(self.leader_edit, "Pilih TTD Pimpinan", "Gambar (*.png *.jpg *.jpeg)"))
-        root.addLayout(sign)
+        sign_box.setLayout(sign)
+        root.addWidget(sign_box)
 
         # Isi frame (teks) — 9 butir. Pilihan Desa/Kelurahan dan
         # Kabupaten/Kota memakai radio (satu harus dipilih) + isian nama.
         frame_box = QGroupBox("Isi Frame")
         frame = QFormLayout()
-        frame.setRowWrapPolicy(WRAP_ALL_ROWS)
         self.coord_combo = QComboBox()
         self.coord_combo.addItems(engine.COORD_SYSTEMS)
         self.coord_combo.setCurrentText(engine.DEFAULT_COORD_SYSTEM)
@@ -332,20 +382,23 @@ class YukGeneratePbtPanel(QWidget):
         frame_box.setLayout(frame)
         root.addWidget(frame_box)
 
+        # Output (v0.6.5): folder + format + opsi lembar.
+        out_box = QGroupBox("Output")
         out = QFormLayout()
-        out.setRowWrapPolicy(WRAP_ALL_ROWS)
         self.output_edit = QLineEdit()
         out.addRow("Folder output:", self._picker_dir(self.output_edit))
         self.format_combo = QComboBox()
         self.format_combo.addItems(["PDF", "PDF+ZIP"])
         out.addRow("Format:", self.format_combo)
-        root.addLayout(out)
-
         self.first_only_check = QCheckBox("Hanya lembar pertama (uji cepat)")
-        root.addWidget(self.first_only_check)
+        out.addRow(self.first_only_check)
         self.save_qgs_check = QCheckBox("Simpan proyek QGIS (.qgs, semua lembar)")
         self.save_qgs_check.setChecked(True)
-        root.addWidget(self.save_qgs_check)
+        out.addRow(self.save_qgs_check)
+        self.export_shp_check = QCheckBox("Ekspor SHP persil per lembar (.zip per lembar, tanpa jalan/sungai)")
+        out.addRow(self.export_shp_check)
+        out_box.setLayout(out)
+        root.addWidget(out_box)
 
         buttons = QHBoxLayout()
         self.count_button = QPushButton("Hitung lembar")
@@ -423,9 +476,29 @@ class YukGeneratePbtPanel(QWidget):
     def _on_gpkg_changed(self):
         path = self.gpkg_edit.text().strip()
         self.layer_combo.clear()
+        self.dividers_status.setText("")
         if path and os.path.exists(path):
             layers = gpkg_layers(path)
-            self.layer_combo.addItems(layers)
+            # Layer pembantu converter (dividers/labels) bukan layer
+            # persil — jangan tampilkan di pemilih layer.
+            parcel_layers = [
+                l for l in layers if l.lower() not in ("dividers", "labels")
+            ]
+            self.layer_combo.addItems(parcel_layers)
+            if "dividers" in [l.lower() for l in layers]:
+                try:
+                    conn = sqlite3.connect(
+                        "file:{}?mode=ro".format(path), uri=True
+                    )
+                    (count,) = conn.execute(
+                        'SELECT COUNT(*) FROM "dividers"'
+                    ).fetchone()
+                    conn.close()
+                    self.dividers_status.setText(
+                        "Pembagi garis: {} (layer dividers)".format(count)
+                    )
+                except Exception:
+                    pass
 
     def _log(self, message):
         self.log.append(message)
@@ -443,6 +516,13 @@ class YukGeneratePbtPanel(QWidget):
             "scale": self.scale_combo.currentText(),
             "parcel_color": self.parcel_color_combo.currentText(),
             "text_color": self.text_color_combo.currentText(),
+            "show_dividers": self.show_dividers_check.isChecked(),
+            "road_width_mm": engine.parse_width_mm(self.road_width_combo.currentText()),
+            "water_width_mm": engine.parse_width_mm(self.water_width_combo.currentText()),
+            "parcel_width_mm": engine.parse_width_mm(self.parcel_width_combo.currentText()),
+            "shm_width_mm": engine.parse_width_mm(self.shm_width_combo.currentText()),
+            "shm_color": self.shm_color_combo.currentText(),
+            "text_buffer": self.text_buffer_check.isChecked(),
             "with_imagery": self.with_imagery_check.isChecked(),
             "without_imagery": self.without_imagery_check.isChecked(),
             "output_format": "zip" if self.format_combo.currentText() == "PDF+ZIP" else "pdf",
@@ -454,6 +534,7 @@ class YukGeneratePbtPanel(QWidget):
             "leader_path": self.leader_edit.text().strip() or None,
             "first_sheet_only": self.first_only_check.isChecked(),
             "save_qgs": self.save_qgs_check.isChecked(),
+            "export_shp": self.export_shp_check.isChecked(),
             "coord_system": self.coord_combo.currentText(),
             "area_kind": "Desa" if self.area_desa_radio.isChecked() else "Kelurahan",
             "area_name": self.area_edit.text().strip(),
@@ -491,6 +572,7 @@ class YukGeneratePbtPanel(QWidget):
         self.license_status.setText(lic.status_text())
         self.code_edit.setEnabled(not active)
         self.activate_button.setEnabled(not active)
+        self.deactivate_button.setEnabled(active)
         self.count_button.setEnabled(active)
         self.preview_button.setEnabled(active)
         self.generate_button.setEnabled(active)
@@ -502,6 +584,15 @@ class YukGeneratePbtPanel(QWidget):
             return
         ok, msg = lic.activate(code)
         self._log(("Aktif: " if ok else "Gagal: ") + msg)
+        self._refresh_license_ui()
+
+    def _on_deactivate(self):
+        # v0.7.6: lepas kode aktif supaya bisa ganti kode baru tanpa
+        # restart QGIS — lic.deactivate() sudah ada sejak lama tapi
+        # tidak pernah dipasang ke tombol mana pun.
+        lic.deactivate()
+        self.code_edit.clear()
+        self._log("Nonaktif — masukkan kode akses baru.")
         self._refresh_license_ui()
 
     def _on_count(self):
@@ -524,6 +615,11 @@ class YukGeneratePbtPanel(QWidget):
             boxes, _fields = engine.read_feature_boxes(
                 layer, engine.detect_pk_column(layer)
             )
+            line_dividers, _geoms = engine.read_line_dividers(opts["gpkg_path"])
+            if line_dividers:
+                self._log(
+                    "Pembagi garis: {} (layer dividers)".format(len(line_dividers))
+                )
             layout = engine.load_layout(opts["qpt_path"])
             map_item = engine._find_item_by_id_ci(layout, "Map 1")
             if map_item is None:
@@ -535,7 +631,7 @@ class YukGeneratePbtPanel(QWidget):
                         break
             rect = map_item.rect()
             groups = engine.group_feature_boxes(
-                list(boxes), opts["scale"], (rect.width(), rect.height())
+                list(boxes) + line_dividers, opts["scale"], (rect.width(), rect.height())
             )
             self._log(
                 "Lembar: {} — jumlah bidang per lembar: {}".format(
@@ -585,6 +681,16 @@ class YukGeneratePbtPanel(QWidget):
                     if result.get("qgs")
                     else ""
                 )
+                + (
+                    " + SHP {} file ZIP (per lembar)".format(len(result["shp"]))
+                    if isinstance(result.get("shp"), (list, tuple))
+                    and result.get("shp")
+                    else (
+                        " + SHP {}".format(os.path.basename(result["shp"]))
+                        if result.get("shp")
+                        else ""
+                    )
+                )
             )
             for w in result["warnings"]:
                 self._log("Peringatan: {}".format(w))
@@ -626,7 +732,7 @@ class YukGeneratePbtPanel(QWidget):
                 )
             )
             dialog = PreviewDialog(result, lic.remaining_generates(), self)
-            accepted = dialog.exec() == QDialog.Accepted
+            accepted = dialog.exec() == QDialog.DialogCode.Accepted
         except Exception as exc:
             self._log("Gagal: {}".format(exc))
         finally:
